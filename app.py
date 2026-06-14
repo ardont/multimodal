@@ -298,6 +298,61 @@ def refresh_nodes_status():
     html += '</div>'
     return html
 
+def check_compliance(text):
+    text_lower = text.lower()
+    greetings = ["здравствуй", "добрый день", "доброе утро", "добрый вечер", "приветствую", "алло", "слушаю"]
+    goodbyes = ["до свидания", "всего доброго", "всего хорошего", "до встречи", "хорошего дня", "пока"]
+    politeness = ["спасибо", "пожалуйста", "благодарю", "извините", "прошу прощения", "рад помочь"]
+    stop_words = ["вы должны", "ваша проблема", "не знаю", "ужас", "бред", "заткнись", "заткнитесь", "глупость"]
+    
+    has_greeting = any(g in text_lower for g in greetings)
+    has_goodbye = any(g in text_lower for g in goodbyes)
+    has_politeness = any(p in text_lower for p in politeness)
+    has_stop_words = any(s in text_lower for s in stop_words)
+    
+    found_stops = [s for s in stop_words if s in text_lower]
+    
+    return {
+        "greeting": has_greeting,
+        "goodbye": has_goodbye,
+        "politeness": has_politeness,
+        "no_stop_words": not has_stop_words,
+        "found_stops": found_stops
+    }
+
+def generate_recommendations(res, compliance):
+    recs = []
+    
+    # Рекомендации по комплаенсу
+    if not compliance["greeting"]:
+        recs.append("👋 <b>Отсутствует приветствие:</b> Менеджер забыл поздороваться. Обязательно используйте стандартные фразы (например: <i>'Добрый день, меня зовут...'</i>).")
+    if not compliance["goodbye"]:
+        recs.append("🤝 <b>Отсутствует прощание:</b> В конце разговора не зафиксировано вежливого прощания. Рекомендуется завершать звонок фразой <i>'Всего доброго, до свидания'</i>.")
+    if not compliance["politeness"]:
+        recs.append("✨ <b>Низкий уровень вежливости:</b> Добавьте в диалог больше клиентоориентированных слов (<i>'спасибо', 'пожалуйста', 'буду рад помочь'</i>).")
+    if not compliance["no_stop_words"]:
+        stops_str = ", ".join([f"'{s}'" for s in compliance["found_stops"]])
+        recs.append(f"⚠️ <b>Обнаружены стоп-слова ({stops_str}):</b> Эти фразы вызывают сопротивление клиента. Замените их на конструктивные формулировки.")
+        
+    # Рекомендации по акустике
+    tempo = res['features'].get('tempo_bpm', 0)
+    if tempo > 145:
+        recs.append("⚡ <b>Слишком быстрый темп речи:</b> Скорость речи превышает 145 BPM. Говорите медленнее, делайте паузы, чтобы клиент успевал усвоить информацию.")
+    elif tempo < 70 and tempo > 0:
+        recs.append("🐢 <b>Слишком медленный темп речи:</b> Речь звучит пассивно. Постарайтесь говорить более динамично и уверенно.")
+        
+    # Рекомендации по стрессу
+    final_stress = res['final_stress']
+    if final_stress >= 0.7:
+        recs.append("🔥 <b>Критический стресс:</b> Индекс эмоционального напряжения крайне высок. Менеджеру рекомендуется сделать перерыв и выпить воды перед следующим звонком.")
+    elif final_stress >= 0.4:
+        recs.append("📈 <b>Повышенное волнение:</b> Зафиксирована умеренная эмоциональная нестабильность. Старайтесь контролировать дыхание и говорить ровным тоном.")
+        
+    if not recs:
+        recs.append("🌟 <b>Идеальный звонок!</b> Все требования комплаенса соблюдены, уровень стресса в норме, темп речи оптимальный. Так держать!")
+        
+    return recs
+
 def predict(audio):
     if audio is None:
         return """
@@ -314,70 +369,184 @@ def predict(audio):
         stress_class = "stress-high"
         badge_class = "badge-stress-high"
         status_text = "Критический стресс / Аномалия"
+        gauge_color = "#ef4444"
+        timeline_main_color = "#ef4444"
     elif stress >= 0.4:
         stress_class = "stress-med"
         badge_class = "badge-stress-med"
-        status_text = "Повышенное волнение / Измененное состояние"
+        status_text = "Повышенное волнение"
+        gauge_color = "#f59e0b"
+        timeline_main_color = "#f59e0b"
     else:
         stress_class = "stress-low"
         badge_class = "badge-stress-low"
         status_text = "Нормальное / Стабильное состояние"
+        gauge_color = "#10b981"
+        timeline_main_color = "#10b981"
         
     features = res['features']
     
-    # Генерация HTML
+    # Проверка скриптового соответствия
+    compliance = check_compliance(res['transcription'])
+    recs = generate_recommendations(res, compliance)
+    
+    # Стилизация чек-листа комплаенса
+    c_greeting_icon = "✓" if compliance["greeting"] else "✗"
+    c_greeting_color = "#10b981" if compliance["greeting"] else "#ef4444"
+    c_greeting_desc = "Найдено слово приветствия" if compliance["greeting"] else "Приветствие отсутствует"
+    timeline_greeting_color = "#10b981" if compliance["greeting"] else "#ef4444"
+    
+    c_goodbye_icon = "✓" if compliance["goodbye"] else "✗"
+    c_goodbye_color = "#10b981" if compliance["goodbye"] else "#ef4444"
+    c_goodbye_desc = "Найдено слово прощания" if compliance["goodbye"] else "Прощание отсутствует"
+    timeline_goodbye_color = "#10b981" if compliance["goodbye"] else "#ef4444"
+    
+    c_politeness_icon = "✓" if compliance["politeness"] else "✗"
+    c_politeness_color = "#10b981" if compliance["politeness"] else "#ef4444"
+    c_politeness_desc = "Вежливые слова найдены" if compliance["politeness"] else "Добавьте больше вежливых фраз"
+    
+    c_stops_icon = "✓" if compliance["no_stop_words"] else "✗"
+    c_stops_color = "#10b981" if compliance["no_stop_words"] else "#ef4444"
+    c_stops_desc = "Токсичные стоп-слова не обнаружены" if compliance["no_stop_words"] else f"Обнаружено: {', '.join(compliance['found_stops'])}"
+    
+    # Генерация HTML-рекомендаций
+    recs_html = "".join([f"<li style='margin-bottom: 0.5rem;'>{r}</li>" for r in recs])
+    
+    # Генерация HTML отчета
     report_html = f"""
-    <div class="report-card {stress_class}">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.5rem;">
-            <h3 style="margin: 0; color: #fff; font-size: 1.3rem; font-weight: 600;">📊 Результат мультимодального анализа</h3>
-            <span class="metric-badge {badge_class}">{status_text}</span>
+    <div class="report-card {stress_class}" style="font-family: 'Outfit', sans-serif; padding: 1.5rem; background: rgba(10, 15, 26, 0.65); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 16px; backdrop-filter: blur(12px); color: #f3f4f6;">
+        
+        <!-- Верхняя панель: Заголовок и итоговый индекс -->
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 1.25rem; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+            <div>
+                <h3 style="margin: 0; font-size: 1.4rem; font-weight: 700; background: linear-gradient(to right, #60a5fa, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">📊 Результат Экспресс-Анализа</h3>
+                <span style="color: #9ca3af; font-size: 0.85rem;">Звонок обработан распределенной нейросетью</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <div style="text-align: right;">
+                    <span style="font-size: 0.75rem; color: #9ca3af; display: block; text-transform: uppercase; letter-spacing: 0.05em;">Индекс аномалии</span>
+                    <span style="font-size: 1.8rem; font-weight: 800; color: {gauge_color};">{res['final_stress'] * 100:.0f}%</span>
+                </div>
+                <span class="metric-badge {badge_class}" style="font-size: 0.9rem; padding: 0.4rem 1rem;">{status_text}</span>
+            </div>
         </div>
         
-        <div style="margin-bottom: 1.25rem;">
-            <span style="color: #9ca3af; font-size: 0.85rem; display: block; margin-bottom: 0.35rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Транскрипция (ASR):</span>
-            <p style="margin: 0; font-size: 1.05rem; line-height: 1.5; color: #f3f4f6; font-style: italic; background: rgba(255,255,255,0.02); padding: 0.85rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
-                "{res['transcription']}"
-            </p>
-        </div>
-        
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.25rem;">
-            <div style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
-                <span style="color: #9ca3af; font-size: 0.85rem; display: block; margin-bottom: 0.25rem;">Текстовый стресс-индекс:</span>
-                <div style="font-size: 1.6rem; font-weight: bold; color: #60a5fa;">{res['text_stress'] * 100:.0f}%</div>
-                <div style="width: 100%; background-color: rgba(255,255,255,0.08); height: 8px; border-radius: 4px; overflow: hidden; margin-top: 0.5rem;">
-                    <div style="width: {res['text_stress'] * 100}%; background: linear-gradient(to right, #3b82f6, #60a5fa); height: 100%;"></div>
+        <!-- Средняя часть: Текст и Чек-лист регламента -->
+        <div style="display: grid; grid-template-columns: 1.25fr 0.75fr; gap: 1.5rem; margin-bottom: 1.5rem; align-items: start;">
+            
+            <!-- Левая колонка: ASR и таймлайн -->
+            <div>
+                <span style="color: #9ca3af; font-size: 0.8rem; display: block; margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Распознанный текст (ASR):</span>
+                <div style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); line-height: 1.6; font-style: italic; color: #e5e7eb; font-size: 1rem; margin-bottom: 1.25rem; max-height: 120px; overflow-y: auto;">
+                    "{res['transcription']}"
+                </div>
+                
+                <!-- Стресс-индексы -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.25rem;">
+                    <div style="background: rgba(255,255,255,0.02); padding: 0.85rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                        <span style="color: #9ca3af; font-size: 0.8rem; display: block; margin-bottom: 0.25rem;">Текстовый стресс:</span>
+                        <div style="font-size: 1.4rem; font-weight: bold; color: #60a5fa;">{res['text_stress'] * 100:.0f}%</div>
+                        <div style="width: 100%; background-color: rgba(255,255,255,0.08); height: 6px; border-radius: 3px; overflow: hidden; margin-top: 0.4rem;">
+                            <div style="width: {res['text_stress'] * 100}%; background: linear-gradient(to right, #3b82f6, #60a5fa); height: 100%;"></div>
+                        </div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.02); padding: 0.85rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                        <span style="color: #9ca3af; font-size: 0.8rem; display: block; margin-bottom: 0.25rem;">Акустический стресс:</span>
+                        <div style="font-size: 1.4rem; font-weight: bold; color: #a78bfa;">{res['audio_stress'] * 100:.0f}%</div>
+                        <div style="width: 100%; background-color: rgba(255,255,255,0.08); height: 6px; border-radius: 3px; overflow: hidden; margin-top: 0.4rem;">
+                            <div style="width: {res['audio_stress'] * 100}%; background: linear-gradient(to right, #7c3aed, #a78bfa); height: 100%;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Динамический таймлайн звонка -->
+                <span style="color: #9ca3af; font-size: 0.8rem; display: block; margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Динамический таймлайн звонка:</span>
+                <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.04); border-radius: 8px; padding: 0.85rem 1.25rem;">
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 0.25rem; flex: 1;">
+                        <div style="width: 12px; height: 12px; border-radius: 50%; background-color: {timeline_greeting_color}; box-shadow: 0 0 8px {timeline_greeting_color};"></div>
+                        <span style="font-size: 0.75rem; color: #9ca3af;">Приветствие</span>
+                    </div>
+                    <div style="height: 2px; background: rgba(255,255,255,0.1); flex: 1.5; margin: 0 0.5rem 12px 0.5rem;"></div>
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 0.25rem; flex: 1;">
+                        <div style="width: 12px; height: 12px; border-radius: 50%; background-color: {timeline_main_color}; box-shadow: 0 0 8px {timeline_main_color};"></div>
+                        <span style="font-size: 0.75rem; color: #9ca3af;">Диалог</span>
+                    </div>
+                    <div style="height: 2px; background: rgba(255,255,255,0.1); flex: 1.5; margin: 0 0.5rem 12px 0.5rem;"></div>
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 0.25rem; flex: 1;">
+                        <div style="width: 12px; height: 12px; border-radius: 50%; background-color: {timeline_goodbye_color}; box-shadow: 0 0 8px {timeline_goodbye_color};"></div>
+                        <span style="font-size: 0.75rem; color: #9ca3af;">Прощание</span>
+                    </div>
                 </div>
             </div>
             
-            <div style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
-                <span style="color: #9ca3af; font-size: 0.85rem; display: block; margin-bottom: 0.25rem;">Акустический стресс-индекс:</span>
-                <div style="font-size: 1.6rem; font-weight: bold; color: #a78bfa;">{res['audio_stress'] * 100:.0f}%</div>
-                <div style="width: 100%; background-color: rgba(255,255,255,0.08); height: 8px; border-radius: 4px; overflow: hidden; margin-top: 0.5rem;">
-                    <div style="width: {res['audio_stress'] * 100}%; background: linear-gradient(to right, #7c3aed, #a78bfa); height: 100%;"></div>
+            <!-- Правая колонка: Чек-лист регламента -->
+            <div style="background: rgba(255,255,255,0.02); padding: 1.25rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); height: 100%; box-sizing: border-box;">
+                <span style="color: #9ca3af; font-size: 0.8rem; display: block; margin-bottom: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Соблюдение регламента (QA):</span>
+                <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                    
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <span style="font-size: 1.2rem; font-weight: bold; color: {c_greeting_color}; width: 20px; text-align: center;">{c_greeting_icon}</span>
+                        <div>
+                            <span style="font-size: 0.85rem; font-weight: 600; display: block; color: #f3f4f6;">Приветствие</span>
+                            <span style="font-size: 0.75rem; color: #9ca3af; display: block; line-height: 1.2;">{c_greeting_desc}</span>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; align-items: center; gap: 0.75rem; border-top: 1px solid rgba(255,255,255,0.04); padding-top: 0.5rem;">
+                        <span style="font-size: 1.2rem; font-weight: bold; color: {c_goodbye_color}; width: 20px; text-align: center;">{c_goodbye_icon}</span>
+                        <div>
+                            <span style="font-size: 0.85rem; font-weight: 600; display: block; color: #f3f4f6;">Прощание</span>
+                            <span style="font-size: 0.75rem; color: #9ca3af; display: block; line-height: 1.2;">{c_goodbye_desc}</span>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; align-items: center; gap: 0.75rem; border-top: 1px solid rgba(255,255,255,0.04); padding-top: 0.5rem;">
+                        <span style="font-size: 1.2rem; font-weight: bold; color: {c_politeness_color}; width: 20px; text-align: center;">{c_politeness_icon}</span>
+                        <div>
+                            <span style="font-size: 0.85rem; font-weight: 600; display: block; color: #f3f4f6;">Вежливость</span>
+                            <span style="font-size: 0.75rem; color: #9ca3af; display: block; line-height: 1.2;">{c_politeness_desc}</span>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; align-items: center; gap: 0.75rem; border-top: 1px solid rgba(255,255,255,0.04); padding-top: 0.5rem;">
+                        <span style="font-size: 1.2rem; font-weight: bold; color: {c_stops_color}; width: 20px; text-align: center;">{c_stops_icon}</span>
+                        <div>
+                            <span style="font-size: 0.85rem; font-weight: 600; display: block; color: #f3f4f6;">Отсутствие стоп-слов</span>
+                            <span style="font-size: 0.75rem; color: #9ca3af; display: block; line-height: 1.2;">{c_stops_desc}</span>
+                        </div>
+                    </div>
+                    
                 </div>
             </div>
+            
         </div>
-
-        <div style="background: linear-gradient(to right, rgba(96, 165, 250, 0.08), rgba(167, 139, 250, 0.08)); padding: 1.25rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); text-align: center; margin-bottom: 1.5rem; box-shadow: inset 0 0 10px rgba(255,255,255,0.02);">
-            <span style="color: #d1d5db; font-size: 0.95rem; display: block; margin-bottom: 0.25rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Итоговый индекс аномалии (Late Fusion):</span>
-            <div style="font-size: 2.5rem; font-weight: 800; background: linear-gradient(to right, #60a5fa, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: -0.02em;">{res['final_stress'] * 100:.0f}%</div>
+        
+        <!-- Советник ИИ -->
+        <div style="background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(37, 99, 235, 0.08) 100%); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; box-shadow: 0 4px 15px rgba(139, 92, 246, 0.15);">
+            <h4 style="margin: 0 0 0.75rem 0; color: #c084fc; font-size: 1rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem;">
+                💡 Интеллектуальные рекомендации (AI Coach):
+            </h4>
+            <ul style="margin: 0; padding-left: 1.25rem; font-size: 0.9rem; line-height: 1.6; color: #d1d5db; display: flex; flex-direction: column; gap: 0.5rem;">
+                {recs_html}
+            </ul>
         </div>
-
-        <h4 style="margin: 0 0 0.75rem 0; color: #e5e7eb; font-size: 1.05rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">🎙 Акустические характеристики</h4>
+        
+        <!-- Акустические метрики -->
+        <h4 style="margin: 0 0 0.75rem 0; color: #e5e7eb; font-size: 1rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">🎙 Акустические характеристики звука</h4>
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 0.75rem;">
-            <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
+            <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
                 <span style="color: #9ca3af; font-size: 0.75rem; display: block; margin-bottom: 0.25rem;">Длительность</span>
                 <span style="font-size: 1.1rem; font-weight: 600; color: #f3f4f6;">{features.get('duration', 0)} сек</span>
             </div>
-            <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
+            <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
                 <span style="color: #9ca3af; font-size: 0.75rem; display: block; margin-bottom: 0.25rem;">Громкость (RMS)</span>
                 <span style="font-size: 1.1rem; font-weight: 600; color: #f3f4f6;">{features.get('loudness_mean', 0)}</span>
             </div>
-            <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
+            <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
                 <span style="color: #9ca3af; font-size: 0.75rem; display: block; margin-bottom: 0.25rem;">Доля тишины</span>
                 <span style="font-size: 1.1rem; font-weight: 600; color: #f3f4f6;">{features.get('silence_ratio', 0) * 100:.0f}%</span>
             </div>
-            <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
+            <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
                 <span style="color: #9ca3af; font-size: 0.75rem; display: block; margin-bottom: 0.25rem;">Темп речи</span>
                 <span style="font-size: 1.1rem; font-weight: 600; color: #f3f4f6;">{features.get('tempo_bpm', 0)} BPM</span>
             </div>
