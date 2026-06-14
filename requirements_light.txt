@@ -1,0 +1,9 @@
+gradio
+fastapi
+uvicorn
+requests
+librosa
+soundfile
+numpy
+python-dotenv
+psutil

@@ -1,0 +1,12 @@
+gradio
+transformers
+torch
+torchaudio
+accelerate
+librosa
+soundfile
+numpy
+python-dotenv
+fastapi
+uvicorn
+requests

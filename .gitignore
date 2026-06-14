@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller
+#  Easy to install packages or data from copy behavior
+*.exe
+*.sof
+*.cert
+
+# Local env files
+.env
+.env.local
+
+# IDEs
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Model weights
+models/*
+!models/.gitkeep
+
+# System and logs
+*.log
+.DS_Store
