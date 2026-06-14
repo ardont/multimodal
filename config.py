@@ -20,7 +20,8 @@ except ImportError:
 ASR_MODEL_NAME = "openai/whisper-tiny"  # tiny быстрее загружается и меньше весит
 
 # Для анализа эмоций по тексту (Sentiment/Emotion на русском)
-TEXT_MODEL_NAME = "AnatolyBelevtsov/rubert-base-cased-sentiment"
+# Заменили на открытую и стабильную публичную модель от blanchefort
+TEXT_MODEL_NAME = "blanchefort/rubert-base-by-sentiment"
 
 # Для анализа эмоций по аудио (Speech Emotion Recognition)
 AUDIO_MODEL_NAME = "harshit345/xlsr-wav2vec-speech-emotion-recognition"
