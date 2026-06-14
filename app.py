@@ -387,7 +387,9 @@ def predict(audio):
     return report_html
 
 # Создаем интерфейс Gradio
-with gr.Blocks(title="GPB MER Distributed MVP", css=custom_css) as demo:
+with gr.Blocks(title="GPB MER Distributed MVP") as demo:
+    # Инжектируем CSS напрямую через HTML для совместимости с Gradio 6
+    gr.HTML(f"<style>{custom_css}</style>")
     # Заголовок
     with gr.Row(elem_classes="header-container"):
         with gr.Column():
@@ -405,7 +407,7 @@ with gr.Blocks(title="GPB MER Distributed MVP", css=custom_css) as demo:
         # Вкладка 1: Анализ речи
         with gr.Tab("🎙 Анализатор"):
             with gr.Row():
-                with gr.Column(scale=1):
+                with gr.Column(scale=5):
                     gr.Markdown("### 📥 Входной аудиопоток")
                     audio_in = gr.Audio(
                         sources=["microphone", "upload"], 
@@ -415,7 +417,7 @@ with gr.Blocks(title="GPB MER Distributed MVP", css=custom_css) as demo:
                     )
                     btn = gr.Button("🚀 Запустить распределенный анализ", variant="primary")
                     
-                with gr.Column(scale=1.2):
+                with gr.Column(scale=6):
                     gr.Markdown("### 📊 Отчет анализатора")
                     output_html = gr.HTML(
                         value="""
@@ -431,7 +433,7 @@ with gr.Blocks(title="GPB MER Distributed MVP", css=custom_css) as demo:
             gr.Markdown("### 📡 Маршрутизация моделей по узлам сети")
             
             with gr.Row():
-                with gr.Column(scale=1):
+                with gr.Column(scale=5):
                     gr.Markdown("#### Добавить вычислительный узел (Воркер)")
                     node_ip_input = gr.Textbox(
                         placeholder="Например: 100.115.20.12:7860", 
@@ -440,7 +442,7 @@ with gr.Blocks(title="GPB MER Distributed MVP", css=custom_css) as demo:
                     add_node_btn = gr.Button("➕ Зарегистрировать узел", variant="secondary")
                     add_node_status = gr.HTML(value="")
                     
-                with gr.Column(scale=1.2):
+                with gr.Column(scale=6):
                     gr.Markdown("#### Маршруты выполнения задач")
                     asr_select = gr.Dropdown(
                         choices=get_node_choices(), 
