@@ -29,3 +29,10 @@ models/*
 # System and logs
 *.log
 .DS_Store
+
+# Virtual environments
+.venv*/
+venv*/
+.venv_full/
+.venv_light/
+
