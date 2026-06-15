@@ -1204,18 +1204,32 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
 app = gr.mount_gradio_app(app, demo, path="/")
 
 if __name__ == "__main__":
-    print(f"[Server] Запуск распределенного узла на http://127.0.0.1:{config.PORT} (или http://localhost:{config.PORT})")
-    
-    # Автоматически открываем браузер через 1.5 секунды после запуска uvicorn
     import threading
     import webbrowser
+    import subprocess
     
+    # Автоматически открываем браузер и выводим кликабельную ссылку через 2.0 секунды
     def auto_open():
-        time.sleep(1.5)
+        time.sleep(2.0)
+        url = f"http://127.0.0.1:{config.PORT}"
+        print("\n" + "=" * 70)
+        print("🚀 СЕРВЕР ЗАПУЩЕН И ГОТОВ К РАБОТЕ!")
+        print("👉 Ссылка для открытия в браузере (зажмите Ctrl и кликните):")
+        print(f"   {url}")
+        print("=" * 70 + "\n")
+        
         try:
-            webbrowser.open(f"http://localhost:{config.PORT}")
+            # На Windows webbrowser.open часто работает нестабильно в venv,
+            # поэтому сначала пытаемся открыть через системный 'start'
+            if os.name == 'nt':
+                subprocess.Popen(f"start {url}", shell=True)
+            else:
+                webbrowser.open(url)
         except Exception as e:
-            print(f"[Server] Не удалось автоматически открыть браузер: {e}")
+            try:
+                webbrowser.open(url)
+            except Exception as ex:
+                print(f"[Server] Не удалось автоматически открыть браузер: {ex}")
             
     threading.Thread(target=auto_open, daemon=True).start()
     
