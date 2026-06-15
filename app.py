@@ -1154,7 +1154,7 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
                     asr_select = gr.Dropdown(
                         choices=get_node_choices(), 
                         value=config.ROUTING["asr"], 
-                        label="Распознавание речи (ASR / Whisper)"
+                        label="Распознавание речи (ASR / GigaAM)"
                     )
                     text_select = gr.Dropdown(
                         choices=get_node_choices(), 
@@ -1164,7 +1164,7 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
                     audio_select = gr.Dropdown(
                         choices=get_node_choices(), 
                         value=config.ROUTING["audio"], 
-                        label="Анализ акустики звука (Wav2Vec2)"
+                        label="Анализ акустики звука (GigaAM Emo)"
                     )
                     failover_check = gr.Checkbox(
                         label="Авто-переключение на локальный инференс при сбое сети (Smart Network Failover)",
