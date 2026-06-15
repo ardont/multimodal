@@ -1204,5 +1204,5 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
 app = gr.mount_gradio_app(app, demo, path="/")
 
 if __name__ == "__main__":
-    print(f"[Server] Запуск распределенного узла на http://0.0.0.0:{config.PORT}")
+    print(f"[Server] Запуск распределенного узла на http://127.0.0.1:{config.PORT} (или http://localhost:{config.PORT})")
     uvicorn.run(app, host="0.0.0.0", port=config.PORT)
