@@ -1205,4 +1205,18 @@ app = gr.mount_gradio_app(app, demo, path="/")
 
 if __name__ == "__main__":
     print(f"[Server] Запуск распределенного узла на http://127.0.0.1:{config.PORT} (или http://localhost:{config.PORT})")
+    
+    # Автоматически открываем браузер через 1.5 секунды после запуска uvicorn
+    import threading
+    import webbrowser
+    
+    def auto_open():
+        time.sleep(1.5)
+        try:
+            webbrowser.open(f"http://localhost:{config.PORT}")
+        except Exception as e:
+            print(f"[Server] Не удалось автоматически открыть браузер: {e}")
+            
+    threading.Thread(target=auto_open, daemon=True).start()
+    
     uvicorn.run(app, host="0.0.0.0", port=config.PORT)
