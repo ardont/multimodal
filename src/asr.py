@@ -30,5 +30,9 @@ class SpeechToText:
             # Для демо-интерфейса случайный выбор делает приложение «живым»
             return random.choice(mock_texts)
         
-        return self.model.transcribe(audio_path)
+        res = self.model.transcribe(audio_path)
+        # GigaAM v3 возвращает объект TranscriptionResult, извлекаем из него текст
+        if hasattr(res, "text"):
+            return res.text
+        return str(res)
 
