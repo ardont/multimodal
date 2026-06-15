@@ -7,3 +7,4 @@ soundfile
 numpy
 python-dotenv
 psutil
+imageio-ffmpeg

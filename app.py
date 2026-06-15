@@ -1,6 +1,18 @@
 import os
 import shutil
 import tempfile
+
+# Настройка PATH для ffmpeg из imageio-ffmpeg (автоматическое устранение WinError 2 на Windows)
+try:
+    import imageio_ffmpeg
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    ffmpeg_dir = os.path.dirname(ffmpeg_exe)
+    if ffmpeg_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = ffmpeg_dir + os.path.pathsep + os.environ.get("PATH", "")
+    print(f"[FFmpeg] Встроенный FFmpeg успешно добавлен в PATH: {ffmpeg_dir}")
+except Exception as e:
+    print(f"[FFmpeg] [Warning] Не удалось настроить встроенный FFmpeg: {e}")
+
 import time
 import psutil
 import uvicorn
@@ -1289,14 +1301,17 @@ if __name__ == "__main__":
     import webbrowser
     import subprocess
     
-    # Автоматически открываем браузер и выводим кликабельную ссылку через 2.0 секунды
+    # Автоматически открываем браузер и выводим кликабельные ссылки через 2.0 секунды
     def auto_open():
         time.sleep(2.0)
+        ips = get_local_ips()
         url = f"http://127.0.0.1:{config.PORT}"
         print("\n" + "=" * 70)
         print("🚀 СЕРВЕР ЗАПУЩЕН И ГОТОВ К РАБОТЕ!")
-        print("👉 Ссылка для открытия в браузере (зажмите Ctrl и кликните):")
-        print(f"   {url}")
+        print("👉 Ссылки для открытия в браузере (зажмите Ctrl и кликните):")
+        print(f"   Локально: {url}")
+        for ip in ips:
+            print(f"   В сети:   http://{ip}:{config.PORT}")
         print("=" * 70 + "\n")
         
         try:
