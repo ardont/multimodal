@@ -57,4 +57,9 @@ ROUTING = {
     "audio": "local"
 }
 
-print(f"[CONFIG] Загружен с параметрами: MOCK_MODE={MOCK_MODE}, DEVICE={DEVICE_STR}, ROUTING={ROUTING}")
+# Умный откат на локальное выполнение при сбоях сети (Smart Network Failover)
+FAILOVER_TO_LOCAL = True
+
+print(f"[CONFIG] Загружен с параметрами: MOCK_MODE={MOCK_MODE}, DEVICE={DEVICE_STR}, ROUTING={ROUTING}, FAILOVER_TO_LOCAL={FAILOVER_TO_LOCAL}")
+
+

@@ -126,7 +126,7 @@ body, .gradio-container {
 }
 
 .report-card {
-    background: rgba(255, 255, 255, 0.02) !important;
+    background: rgba(10, 15, 26, 0.65) !important;
     border-radius: 12px;
     padding: 1.25rem;
     border-left: 5px solid #3b82f6;
@@ -150,6 +150,16 @@ body, .gradio-container {
 .badge-stress-high { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.25); }
 .badge-stress-med { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.25); }
 .badge-stress-low { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.25); }
+
+@keyframes bounce {
+    0% { transform: scaleY(0.3); }
+    100% { transform: scaleY(1.3); }
+}
+
+.bar {
+    transform-origin: bottom;
+    animation: bounce 0.8s ease-in-out infinite alternate;
+}
 """
 
 # Функции управления состоянием узлов и маршрутизацией
@@ -176,10 +186,11 @@ def add_new_node(address):
         success_msg
     )
 
-def save_routing(asr_target, text_target, audio_target):
+def save_routing(asr_target, text_target, audio_target, failover_enabled):
     config.ROUTING["asr"] = asr_target
     config.ROUTING["text"] = text_target
     config.ROUTING["audio"] = audio_target
+    config.FAILOVER_TO_LOCAL = failover_enabled
     
     # Строим лог роутинга для вывода пользователю
     routes_desc = f"""
@@ -189,6 +200,7 @@ def save_routing(asr_target, text_target, audio_target):
             <li><b>Распознавание (ASR):</b> {asr_target}</li>
             <li><b>Анализ текста:</b> {text_target}</li>
             <li><b>Анализ звука:</b> {audio_target}</li>
+            <li><b>Резервный локальный откат:</b> {'Включен' if failover_enabled else 'Выключен'}</li>
         </ul>
     </div>
     """
@@ -388,6 +400,83 @@ def highlight_keywords(text):
         text_highlighted = pattern.sub(repl_purple, text_highlighted)
         
     return text_highlighted
+
+def generate_kpi_html():
+    if not call_history:
+        return """
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; font-family: 'Outfit', sans-serif;">
+            <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 1rem; text-align: center; backdrop-filter: blur(4px);">
+                <span style="color: #9ca3af; font-size: 0.75rem; display: block; text-transform: uppercase; letter-spacing: 0.05em;">Всего звонков</span>
+                <span style="font-size: 1.8rem; font-weight: 800; color: #fff; margin-top: 0.25rem; display: block;">0</span>
+            </div>
+            <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 1rem; text-align: center; backdrop-filter: blur(4px);">
+                <span style="color: #9ca3af; font-size: 0.75rem; display: block; text-transform: uppercase; letter-spacing: 0.05em;">Средний стресс</span>
+                <span style="font-size: 1.8rem; font-weight: 800; color: #10b981; margin-top: 0.25rem; display: block;">0%</span>
+            </div>
+            <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 1rem; text-align: center; backdrop-filter: blur(4px);">
+                <span style="color: #9ca3af; font-size: 0.75rem; display: block; text-transform: uppercase; letter-spacing: 0.05em;">Средний комплаенс</span>
+                <span style="font-size: 1.8rem; font-weight: 800; color: #60a5fa; margin-top: 0.25rem; display: block;">100%</span>
+            </div>
+            <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 1rem; text-align: center; backdrop-filter: blur(4px);">
+                <span style="color: #9ca3af; font-size: 0.75rem; display: block; text-transform: uppercase; letter-spacing: 0.05em;">Аномалии (Alerts)</span>
+                <span style="font-size: 1.8rem; font-weight: 800; color: #10b981; margin-top: 0.25rem; display: block;">0</span>
+            </div>
+        </div>
+        """
+    
+    total = len(call_history)
+    stresses = []
+    compliances = []
+    alerts = 0
+    
+    for call in call_history:
+        stress_val = int(call["stress"].replace("%", ""))
+        stresses.append(stress_val)
+        if stress_val >= 70:
+            alerts += 1
+            
+        comp_val = int(call["compliance"].split("/")[0])
+        compliances.append(comp_val)
+        
+    avg_stress = sum(stresses) / total
+    avg_comp_percent = (sum(compliances) / (total * 4)) * 100
+    
+    if avg_stress >= 70:
+        stress_color = "#ef4444"
+    elif avg_stress >= 40:
+        stress_color = "#f59e0b"
+    else:
+        stress_color = "#34d399"
+        
+    if avg_comp_percent >= 80:
+        comp_color = "#34d399"
+    elif avg_comp_percent >= 50:
+        comp_color = "#fbbf24"
+    else:
+        comp_color = "#ef4444"
+        
+    alert_color = "#ef4444" if alerts > 0 else "#10b981"
+    
+    return f"""
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; font-family: 'Outfit', sans-serif;">
+        <div style="background: linear-gradient(135deg, rgba(255,255,255,0.01) 0%, rgba(255,255,255,0.03) 100%); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 1rem; text-align: center; backdrop-filter: blur(4px);">
+            <span style="color: #9ca3af; font-size: 0.75rem; display: block; text-transform: uppercase; letter-spacing: 0.05em;">Всего звонков</span>
+            <span style="font-size: 1.8rem; font-weight: 800; color: #fff; margin-top: 0.25rem; display: block;">{total}</span>
+        </div>
+        <div style="background: linear-gradient(135deg, rgba(255,255,255,0.01) 0%, rgba(255,255,255,0.03) 100%); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 1rem; text-align: center; backdrop-filter: blur(4px);">
+            <span style="color: #9ca3af; font-size: 0.75rem; display: block; text-transform: uppercase; letter-spacing: 0.05em;">Средний стресс</span>
+            <span style="font-size: 1.8rem; font-weight: 800; color: {stress_color}; margin-top: 0.25rem; display: block;">{avg_stress:.0f}%</span>
+        </div>
+        <div style="background: linear-gradient(135deg, rgba(255,255,255,0.01) 0%, rgba(255,255,255,0.03) 100%); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 1rem; text-align: center; backdrop-filter: blur(4px);">
+            <span style="color: #9ca3af; font-size: 0.75rem; display: block; text-transform: uppercase; letter-spacing: 0.05em;">Средний комплаенс</span>
+            <span style="font-size: 1.8rem; font-weight: 800; color: {comp_color}; margin-top: 0.25rem; display: block;">{avg_comp_percent:.0f}%</span>
+        </div>
+        <div style="background: linear-gradient(135deg, rgba(255,255,255,0.01) 0%, rgba(255,255,255,0.03) 100%); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 1rem; text-align: center; backdrop-filter: blur(4px);">
+            <span style="color: #9ca3af; font-size: 0.75rem; display: block; text-transform: uppercase; letter-spacing: 0.05em;">Аномалии (Alerts)</span>
+            <span style="font-size: 1.8rem; font-weight: 800; color: {alert_color}; margin-top: 0.25rem; display: block;">{alerts}</span>
+        </div>
+    </div>
+    """
 
 def generate_history_html():
     if not call_history:
@@ -644,7 +733,16 @@ def run_simulation(example_type):
             </ul>
         </div>
         
-        <h4 style="margin: 0 0 0.75rem 0; color: #e5e7eb; font-size: 1rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">🎙 Акустические характеристики звука</h4>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+            <h4 style="margin: 0; color: #e5e7eb; font-size: 1rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">🎙 Акустические характеристики звука</h4>
+            <div style="display: flex; align-items: flex-end; gap: 3px; height: 20px;">
+                <div class="bar" style="width: 3px; height: 12px; background-color: {gauge_color}; border-radius: 2px; animation: bounce 0.8s ease-in-out infinite alternate;"></div>
+                <div class="bar" style="width: 3px; height: 18px; background-color: {gauge_color}; border-radius: 2px; animation: bounce 0.5s ease-in-out infinite alternate; animation-delay: 0.15s;"></div>
+                <div class="bar" style="width: 3px; height: 8px; background-color: {gauge_color}; border-radius: 2px; animation: bounce 1.1s ease-in-out infinite alternate; animation-delay: 0.3s;"></div>
+                <div class="bar" style="width: 3px; height: 15px; background-color: {gauge_color}; border-radius: 2px; animation: bounce 0.7s ease-in-out infinite alternate; animation-delay: 0.1s;"></div>
+                <div class="bar" style="width: 3px; height: 10px; background-color: {gauge_color}; border-radius: 2px; animation: bounce 0.9s ease-in-out infinite alternate; animation-delay: 0.2s;"></div>
+            </div>
+        </div>
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 0.75rem;">
             <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
                 <span style="color: #9ca3af; font-size: 0.75rem; display: block; margin-bottom: 0.25rem;">Длительность</span>
@@ -681,7 +779,7 @@ def run_simulation(example_type):
         "status": status_text
     })
     
-    return report_html, generate_history_html()
+    return report_html, generate_kpi_html(), generate_history_html()
 
 def predict(audio):
     if audio is None:
@@ -689,7 +787,7 @@ def predict(audio):
         <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 1rem; color: #f87171; text-align: center;">
             ⚠️ Пожалуйста, запишите или загрузите аудиофайл.
         </div>
-        """, generate_history_html()
+        """, generate_kpi_html(), generate_history_html()
         
     res = pipeline.run_analysis(audio)
     
@@ -766,7 +864,16 @@ def predict(audio):
         </div>
         
         <!-- Акустические метрики -->
-        <h4 style="margin: 0 0 0.75rem 0; color: #e5e7eb; font-size: 1rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">🎙 Акустические характеристики звука</h4>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+            <h4 style="margin: 0; color: #e5e7eb; font-size: 1rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">🎙 Акустические характеристики звука</h4>
+            <div style="display: flex; align-items: flex-end; gap: 3px; height: 20px;">
+                <div class="bar" style="width: 3px; height: 12px; background-color: {gauge_color}; border-radius: 2px; animation: bounce 0.8s ease-in-out infinite alternate;"></div>
+                <div class="bar" style="width: 3px; height: 18px; background-color: {gauge_color}; border-radius: 2px; animation: bounce 0.5s ease-in-out infinite alternate; animation-delay: 0.15s;"></div>
+                <div class="bar" style="width: 3px; height: 8px; background-color: {gauge_color}; border-radius: 2px; animation: bounce 1.1s ease-in-out infinite alternate; animation-delay: 0.3s;"></div>
+                <div class="bar" style="width: 3px; height: 15px; background-color: {gauge_color}; border-radius: 2px; animation: bounce 0.7s ease-in-out infinite alternate; animation-delay: 0.1s;"></div>
+                <div class="bar" style="width: 3px; height: 10px; background-color: {gauge_color}; border-radius: 2px; animation: bounce 0.9s ease-in-out infinite alternate; animation-delay: 0.2s;"></div>
+            </div>
+        </div>
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 0.75rem;">
             <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
                 <span style="color: #9ca3af; font-size: 0.75rem; display: block; margin-bottom: 0.25rem;">Длительность</span>
@@ -787,7 +894,23 @@ def predict(audio):
         </div>
     </div>
     """
-    return report_html
+    
+    comp_score = 0
+    if compliance["greeting"]: comp_score += 1
+    if compliance["goodbye"]: comp_score += 1
+    if compliance["politeness"]: comp_score += 1
+    if compliance["no_stop_words"]: comp_score += 1
+    
+    now = time.strftime("%H:%M:%S")
+    call_history.append({
+        "time": now,
+        "duration": f"{features.get('duration', 0)} с",
+        "compliance": f"{comp_score}/4",
+        "stress": f"{res['final_stress'] * 100:.0f}%",
+        "status": status_text
+    })
+    
+    return report_html, generate_kpi_html(), generate_history_html()
 
 # Создаем интерфейс Gradio
 with gr.Blocks(title="GPB MER Distributed MVP") as demo:
@@ -836,20 +959,23 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
                         """
                     )
             
+            gr.Markdown("### 📈 Сводный дашборд KPI (Сессия)")
+            kpi_dashboard = gr.HTML(value=generate_kpi_html())
+            
             gr.Markdown("### 📜 Журнал звонков за сессию")
             history_table = gr.HTML(value=generate_history_html())
             
             # Логика событий
-            btn.click(fn=predict, inputs=[audio_in], outputs=[output_html, history_table])
+            btn.click(fn=predict, inputs=[audio_in], outputs=[output_html, kpi_dashboard, history_table])
             
             # Функции-обертки для демо-кнопок
             def load_sim1(): return run_simulation(1)
             def load_sim2(): return run_simulation(2)
             def load_sim3(): return run_simulation(3)
             
-            sim_btn_1.click(fn=load_sim1, inputs=[], outputs=[output_html, history_table])
-            sim_btn_2.click(fn=load_sim2, inputs=[], outputs=[output_html, history_table])
-            sim_btn_3.click(fn=load_sim3, inputs=[], outputs=[output_html, history_table])
+            sim_btn_1.click(fn=load_sim1, inputs=[], outputs=[output_html, kpi_dashboard, history_table])
+            sim_btn_2.click(fn=load_sim2, inputs=[], outputs=[output_html, kpi_dashboard, history_table])
+            sim_btn_3.click(fn=load_sim3, inputs=[], outputs=[output_html, kpi_dashboard, history_table])
             
         # Вкладка 2: Настройка распределения
         with gr.Tab("⚙️ Распределение вычислений"):
@@ -882,6 +1008,10 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
                         value=config.ROUTING["audio"], 
                         label="Анализ акустики звука (Wav2Vec2)"
                     )
+                    failover_check = gr.Checkbox(
+                        label="Авто-переключение на локальный инференс при сбое сети (Smart Network Failover)",
+                        value=config.FAILOVER_TO_LOCAL
+                    )
                     save_routes_btn = gr.Button("💾 Сохранить маршруты", variant="primary")
                     save_routes_status = gr.HTML(value="")
             
@@ -894,7 +1024,7 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
             # Логика сохранения роутинга
             save_routes_btn.click(
                 fn=save_routing,
-                inputs=[asr_select, text_select, audio_select],
+                inputs=[asr_select, text_select, audio_select, failover_check],
                 outputs=[save_routes_status]
             )
             
