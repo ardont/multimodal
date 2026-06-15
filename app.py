@@ -7,11 +7,36 @@ try:
     import imageio_ffmpeg
     ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
     ffmpeg_dir = os.path.dirname(ffmpeg_exe)
+    
+    # Создаем копию ffmpeg.exe, так как imageio_ffmpeg поставляет его под другим именем (например, ffmpeg-win64-v4.2.2.exe)
+    target_ffmpeg = os.path.join(ffmpeg_dir, "ffmpeg.exe")
+    if not os.path.exists(target_ffmpeg):
+        try:
+            import shutil
+            shutil.copy2(ffmpeg_exe, target_ffmpeg)
+            print(f"[FFmpeg] Создан файл-псевдоним: {target_ffmpeg}")
+        except Exception as ex:
+            # Если нет прав на запись в venv, попробуем записать в папку проекта
+            target_proj = os.path.join(os.path.dirname(__file__), "ffmpeg.exe")
+            if not os.path.exists(target_proj):
+                try:
+                    shutil.copy2(ffmpeg_exe, target_proj)
+                    print(f"[FFmpeg] Создан файл-псевдоним в проекте: {target_proj}")
+                except Exception as ex2:
+                    print(f"[FFmpeg] Не удалось скопировать бинарный файл: {ex2}")
+    
     if ffmpeg_dir not in os.environ.get("PATH", ""):
         os.environ["PATH"] = ffmpeg_dir + os.path.pathsep + os.environ.get("PATH", "")
-    print(f"[FFmpeg] Встроенный FFmpeg успешно добавлен в PATH: {ffmpeg_dir}")
+    
+    # Также добавляем папку проекта на случай копирования туда
+    proj_dir = os.path.dirname(__file__)
+    if proj_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = proj_dir + os.path.pathsep + os.environ.get("PATH", "")
+        
+    print(f"[FFmpeg] Встроенный FFmpeg успешно настроен в PATH.")
 except Exception as e:
     print(f"[FFmpeg] [Warning] Не удалось настроить встроенный FFmpeg: {e}")
+
 
 import time
 import psutil
