@@ -106,6 +106,19 @@ async def api_history(username: str = None, role: str = None):
         })
     return history
 
+@app.get("/download/app")
+async def download_app():
+    from fastapi.responses import FileResponse
+    # Путь к APK-файлу в структуре проекта
+    apk_path = os.path.join(os.path.dirname(__file__), "android-app", "app", "build", "outputs", "apk", "debug", "app-debug.apk")
+    if os.path.exists(apk_path):
+        return FileResponse(
+            apk_path, 
+            media_type="application/vnd.android.package-archive", 
+            filename="gpb_mer_client.apk"
+        )
+    return {"error": "APK-файл еще не собран. Пожалуйста, соберите Android-проект в Android Studio."}
+
 @app.get("/api/status")
 async def get_status():
     """Возвращает системные метрики текущего узла для мониторинга."""
@@ -590,6 +603,67 @@ def highlight_keywords(text):
         text_highlighted = pattern.sub(repl_purple, text_highlighted)
         
     return text_highlighted
+
+def get_local_ips():
+    import socket
+    ips = []
+    try:
+        hostname = socket.gethostname()
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            if not ip.startswith("127."):
+                ips.append(ip)
+    except Exception:
+        pass
+    
+    try:
+        for interface, addrs in psutil.net_if_addrs().items():
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    ip = addr.address
+                    if not ip.startswith("127.") and ip not in ips:
+                        ips.append(ip)
+    except Exception:
+        pass
+    return ips
+
+def generate_apk_download_html():
+    ips = get_local_ips()
+    html = """
+    <div style="background: rgba(255,255,255,0.02); border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px; padding: 1.25rem; margin-top: 1.5rem; font-family: 'Outfit', sans-serif;">
+        <h3 style="margin-top: 0; color: #fff; font-size: 1.15rem; display: flex; align-items: center; gap: 0.5rem;">📱 Мобильное приложение (Android)</h3>
+        <p style="color: #9ca3af; font-size: 0.85rem; margin-bottom: 1rem;">
+            Вы можете скачать клиентское Android-приложение напрямую на телефон, находясь в той же сети (Wi-Fi или Tailscale VPN). Отсканируйте один из QR-кодов ниже вашей камерой для быстрой загрузки без USB:
+        </p>
+        <div style="display: flex; gap: 1.25rem; flex-wrap: wrap; justify-content: flex-start;">
+    """
+    
+    for ip in ips:
+        url = f"http://{ip}:{config.PORT}/download/app"
+        qr_api = f"https://api.qrserver.com/v1/create-qr-code/?size=120x120&data={url}"
+        html += f"""
+        <div style="text-align: center; background: rgba(0,0,0,0.15); padding: 0.85rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); min-width: 140px;">
+            <span style="color: #60a5fa; font-size: 0.75rem; font-weight: bold; display: block; margin-bottom: 0.5rem;">IP: {ip}</span>
+            <img src="{qr_api}" alt="QR Code" style="border: 4px solid white; border-radius: 6px; width: 110px; height: 110px; margin: 0 auto 0.75rem auto; display: block;" />
+            <a href="{url}" target="_blank" style="display: inline-block; background: #2563eb; color: white; text-decoration: none; padding: 0.35rem 0.65rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600;">Скачать APK</a>
+        </div>
+        """
+        
+    # Всегда выводим 127.0.0.1 как резервную
+    fallback_url = f"http://127.0.0.1:{config.PORT}/download/app"
+    fallback_qr = f"https://api.qrserver.com/v1/create-qr-code/?size=120x120&data={fallback_url}"
+    html += f"""
+    <div style="text-align: center; background: rgba(0,0,0,0.15); padding: 0.85rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); min-width: 140px;">
+        <span style="color: #9ca3af; font-size: 0.75rem; font-weight: bold; display: block; margin-bottom: 0.5rem;">Локально (localhost)</span>
+        <img src="{fallback_qr}" alt="QR Code" style="border: 4px solid white; border-radius: 6px; width: 110px; height: 110px; margin: 0 auto 0.75rem auto; display: block;" />
+        <a href="{fallback_url}" target="_blank" style="display: inline-block; background: #4b5563; color: white; text-decoration: none; padding: 0.35rem 0.65rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600;">Скачать APK</a>
+    </div>
+    """
+        
+    html += """
+        </div>
+    </div>
+    """
+    return html
 
 def generate_kpi_html():
     if not call_history:
@@ -1122,6 +1196,9 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
             
             gr.Markdown("### 📜 Журнал звонков за сессию")
             history_table = gr.HTML(value=generate_history_html())
+            
+            # Блок скачивания мобильного приложения
+            gr.HTML(value=generate_apk_download_html())
             
             # Логика событий
             btn.click(fn=predict, inputs=[audio_in], outputs=[output_html, kpi_dashboard, history_table])
