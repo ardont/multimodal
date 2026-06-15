@@ -18,6 +18,9 @@ app = FastAPI(title="GPB MER Distributed Node API", version="1.0.0")
 # Инициализируем наш мультимодальный пайплайн
 pipeline = MultimodalPipeline()
 
+# Журнал звонков за сессию
+call_history = []
+
 # --- FastAPI ЭНДПОИНТЫ ДЛЯ УДАЛЕННЫХ ВЫЧИСЛЕНИЙ ---
 
 class TextRequest(BaseModel):
@@ -353,17 +356,140 @@ def generate_recommendations(res, compliance):
         
     return recs
 
-def predict(audio):
-    if audio is None:
+def highlight_keywords(text):
+    text_highlighted = text
+    
+    greetings = ["здравствуйте", "добрый день", "доброе утро", "добрый вечер", "приветствую", "алло", "слушаю"]
+    goodbyes = ["до свидания", "всего доброго", "всего хорошего", "до встречи", "хорошего дня", "пока"]
+    politeness = ["спасибо", "пожалуйста", "благодарю", "извините", "прошу прощения", "рад помочь"]
+    stop_words = ["вы должны", "ваша проблема", "не знаю", "ужас", "бред", "заткнись", "заткнитесь", "глупость"]
+    
+    import re
+    
+    def repl_green(m): return f'<span style="color: #10b981; font-weight: bold; border-bottom: 1px dashed #10b981; padding: 0 2px;">{m.group(0)}</span>'
+    def repl_purple(m): return f'<span style="color: #a78bfa; font-weight: bold; border-bottom: 1px dashed #a78bfa; padding: 0 2px;">{m.group(0)}</span>'
+    def repl_blue(m): return f'<span style="color: #60a5fa; font-weight: bold; border-bottom: 1px dashed #60a5fa; padding: 0 2px;">{m.group(0)}</span>'
+    def repl_red(m): return f'<span style="color: #ef4444; font-weight: bold; border-bottom: 1px dashed #ef4444; padding: 0 2px;">{m.group(0)}</span>'
+    
+    for sw in stop_words:
+        pattern = re.compile(re.escape(sw), re.IGNORECASE)
+        text_highlighted = pattern.sub(repl_red, text_highlighted)
+        
+    for g in greetings:
+        pattern = re.compile(re.escape(g), re.IGNORECASE)
+        text_highlighted = pattern.sub(repl_green, text_highlighted)
+        
+    for p in politeness:
+        pattern = re.compile(re.escape(p), re.IGNORECASE)
+        text_highlighted = pattern.sub(repl_blue, text_highlighted)
+        
+    for gb in goodbyes:
+        pattern = re.compile(re.escape(gb), re.IGNORECASE)
+        text_highlighted = pattern.sub(repl_purple, text_highlighted)
+        
+    return text_highlighted
+
+def generate_history_html():
+    if not call_history:
         return """
-        <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 1rem; color: #f87171; text-align: center;">
-            ⚠️ Пожалуйста, запишите или загрузите аудиофайл.
+        <div style="border: 1px dashed rgba(255,255,255,0.05); border-radius: 8px; padding: 1.5rem; text-align: center; color: #9ca3af; font-size: 0.9rem;">
+            Журнал пуст. Проведите анализ хотя бы одного звонка или симуляцию.
         </div>
         """
         
-    res = pipeline.run_analysis(audio)
-    
-    # Определение уровня стресса
+    rows = ""
+    for call in reversed(call_history):
+        stress_val = int(call["stress"].replace("%", ""))
+        if stress_val >= 70:
+            status_style = "background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.25);"
+        elif stress_val >= 40:
+            status_style = "background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.25);"
+        else:
+            status_style = "background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.25);"
+            
+        comp_val = int(call["compliance"].split("/")[0])
+        if comp_val == 4:
+            comp_style = "color: #34d399; font-weight: bold;"
+        elif comp_val >= 2:
+            comp_style = "color: #fbbf24; font-weight: bold;"
+        else:
+            comp_style = "color: #f87171; font-weight: bold;"
+            
+        rows += f"""
+        <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+            <td style="padding: 0.75rem 1rem; color: #9ca3af; font-size: 0.9rem;">{call['time']}</td>
+            <td style="padding: 0.75rem 1rem; color: #e5e7eb; font-size: 0.9rem;">{call['duration']}</td>
+            <td style="padding: 0.75rem 1rem; {comp_style} font-size: 0.9rem;">{call['compliance']}</td>
+            <td style="padding: 0.75rem 1rem; font-weight: bold; color: #f3f4f6; font-size: 0.9rem;">{call['stress']}</td>
+            <td style="padding: 0.75rem 1rem; font-size: 0.85rem;"><span class="metric-badge" style="{status_style} padding: 0.15rem 0.5rem; font-size: 0.8rem;">{call['status']}</span></td>
+        </tr>
+        """
+        
+    table_html = f"""
+    <div style="background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; overflow: hidden; margin-top: 1rem;">
+        <table style="width: 100%; border-collapse: collapse; text-align: left;">
+            <thead>
+                <tr style="background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.08);">
+                    <th style="padding: 0.75rem 1rem; color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; font-weight: bold;">Время</th>
+                    <th style="padding: 0.75rem 1rem; color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; font-weight: bold;">Длительность</th>
+                    <th style="padding: 0.75rem 1rem; color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; font-weight: bold;">Комплаенс</th>
+                    <th style="padding: 0.75rem 1rem; color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; font-weight: bold;">Индекс стресса</th>
+                    <th style="padding: 0.75rem 1rem; color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; font-weight: bold;">Вердикт</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows}
+            </tbody>
+        </table>
+    </div>
+    """
+    return table_html
+
+def run_simulation(example_type):
+    # Симуляция разных сценариев
+    if example_type == 1:
+        text = "Добрый день! Спасибо большое за ожидание. Подскажите, пожалуйста, номер вашего договора, я с радостью вам помогу всего хорошего."
+        res = {
+            "transcription": text,
+            "text_stress": 0.05,
+            "audio_stress": 0.12,
+            "final_stress": 0.09,
+            "features": {
+                "duration": 15,
+                "loudness_mean": -22,
+                "silence_ratio": 0.18,
+                "tempo_bpm": 115
+            }
+        }
+    elif example_type == 2:
+        text = "Да заткнитесь вы уже! Это ваша проблема, что вы не прочитали договор. Вы должны были внести платеж вчера! Это бред какой-то."
+        res = {
+            "transcription": text,
+            "text_stress": 0.88,
+            "audio_stress": 0.95,
+            "final_stress": 0.92,
+            "features": {
+                "duration": 18,
+                "loudness_mean": -12,
+                "silence_ratio": 0.05,
+                "tempo_bpm": 138
+            }
+        }
+    else:
+        text = "Здравствуйте... Ой, извините, я не знаю, наверное... Да-да, сейчас я посмотрю информацию, подождите секундочку, пожалуйста, я постараюсь быстрее..."
+        res = {
+            "transcription": text,
+            "text_stress": 0.35,
+            "audio_stress": 0.55,
+            "final_stress": 0.47,
+            "features": {
+                "duration": 22,
+                "loudness_mean": -18,
+                "silence_ratio": 0.08,
+                "tempo_bpm": 156
+            }
+        }
+        
     stress = res['final_stress']
     if stress >= 0.7:
         stress_class = "stress-high"
@@ -385,12 +511,9 @@ def predict(audio):
         timeline_main_color = "#10b981"
         
     features = res['features']
-    
-    # Проверка скриптового соответствия
     compliance = check_compliance(res['transcription'])
     recs = generate_recommendations(res, compliance)
     
-    # Стилизация чек-листа комплаенса
     c_greeting_icon = "✓" if compliance["greeting"] else "✗"
     c_greeting_color = "#10b981" if compliance["greeting"] else "#ef4444"
     c_greeting_desc = "Найдено слово приветствия" if compliance["greeting"] else "Приветствие отсутствует"
@@ -409,18 +532,16 @@ def predict(audio):
     c_stops_color = "#10b981" if compliance["no_stop_words"] else "#ef4444"
     c_stops_desc = "Токсичные стоп-слова не обнаружены" if compliance["no_stop_words"] else f"Обнаружено: {', '.join(compliance['found_stops'])}"
     
-    # Генерация HTML-рекомендаций
     recs_html = "".join([f"<li style='margin-bottom: 0.5rem;'>{r}</li>" for r in recs])
+    highlighted_transcription = highlight_keywords(res['transcription'])
     
-    # Генерация HTML отчета
     report_html = f"""
     <div class="report-card {stress_class}" style="font-family: 'Outfit', sans-serif; padding: 1.5rem; background: rgba(10, 15, 26, 0.65); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 16px; backdrop-filter: blur(12px); color: #f3f4f6;">
         
-        <!-- Верхняя панель: Заголовок и итоговый индекс -->
         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 1.25rem; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
             <div>
-                <h3 style="margin: 0; font-size: 1.4rem; font-weight: 700; background: linear-gradient(to right, #60a5fa, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">📊 Результат Экспресс-Анализа</h3>
-                <span style="color: #9ca3af; font-size: 0.85rem;">Звонок обработан распределенной нейросетью</span>
+                <h3 style="margin: 0; font-size: 1.4rem; font-weight: 700; background: linear-gradient(to right, #60a5fa, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">📊 Результат Экспресс-Анализа (Симуляция)</h3>
+                <span style="color: #9ca3af; font-size: 0.85rem;">Режим быстрой эмуляции сценариев</span>
             </div>
             <div style="display: flex; align-items: center; gap: 1rem;">
                 <div style="text-align: right;">
@@ -431,17 +552,13 @@ def predict(audio):
             </div>
         </div>
         
-        <!-- Средняя часть: Текст и Чек-лист регламента -->
         <div style="display: grid; grid-template-columns: 1.25fr 0.75fr; gap: 1.5rem; margin-bottom: 1.5rem; align-items: start;">
-            
-            <!-- Левая колонка: ASR и таймлайн -->
             <div>
                 <span style="color: #9ca3af; font-size: 0.8rem; display: block; margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Распознанный текст (ASR):</span>
                 <div style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); line-height: 1.6; font-style: italic; color: #e5e7eb; font-size: 1rem; margin-bottom: 1.25rem; max-height: 120px; overflow-y: auto;">
-                    "{res['transcription']}"
+                    "{highlighted_transcription}"
                 </div>
                 
-                <!-- Стресс-индексы -->
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.25rem;">
                     <div style="background: rgba(255,255,255,0.02); padding: 0.85rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
                         <span style="color: #9ca3af; font-size: 0.8rem; display: block; margin-bottom: 0.25rem;">Текстовый стресс:</span>
@@ -459,7 +576,6 @@ def predict(audio):
                     </div>
                 </div>
 
-                <!-- Динамический таймлайн звонка -->
                 <span style="color: #9ca3af; font-size: 0.8rem; display: block; margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Динамический таймлайн звонка:</span>
                 <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.04); border-radius: 8px; padding: 0.85rem 1.25rem;">
                     <div style="display: flex; flex-direction: column; align-items: center; gap: 0.25rem; flex: 1;">
@@ -479,7 +595,6 @@ def predict(audio):
                 </div>
             </div>
             
-            <!-- Правая колонка: Чек-лист регламента -->
             <div style="background: rgba(255,255,255,0.02); padding: 1.25rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); height: 100%; box-sizing: border-box;">
                 <span style="color: #9ca3af; font-size: 0.8rem; display: block; margin-bottom: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Соблюдение регламента (QA):</span>
                 <div style="display: flex; flex-direction: column; gap: 0.75rem;">
@@ -518,7 +633,126 @@ def predict(audio):
                     
                 </div>
             </div>
-            
+        </div>
+        
+        <div style="background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(37, 99, 235, 0.08) 100%); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; box-shadow: 0 4px 15px rgba(139, 92, 246, 0.15);">
+            <h4 style="margin: 0 0 0.75rem 0; color: #c084fc; font-size: 1rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem;">
+                💡 Интеллектуальные рекомендации (AI Coach):
+            </h4>
+            <ul style="margin: 0; padding-left: 1.25rem; font-size: 0.9rem; line-height: 1.6; color: #d1d5db; display: flex; flex-direction: column; gap: 0.5rem;">
+                {recs_html}
+            </ul>
+        </div>
+        
+        <h4 style="margin: 0 0 0.75rem 0; color: #e5e7eb; font-size: 1rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">🎙 Акустические характеристики звука</h4>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 0.75rem;">
+            <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
+                <span style="color: #9ca3af; font-size: 0.75rem; display: block; margin-bottom: 0.25rem;">Длительность</span>
+                <span style="font-size: 1.1rem; font-weight: 600; color: #f3f4f6;">{features.get('duration', 0)} сек</span>
+            </div>
+            <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
+                <span style="color: #9ca3af; font-size: 0.75rem; display: block; margin-bottom: 0.25rem;">Громкость (RMS)</span>
+                <span style="font-size: 1.1rem; font-weight: 600; color: #f3f4f6;">{features.get('loudness_mean', 0)}</span>
+            </div>
+            <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
+                <span style="color: #9ca3af; font-size: 0.75rem; display: block; margin-bottom: 0.25rem;">Доля тишины</span>
+                <span style="font-size: 1.1rem; font-weight: 600; color: #f3f4f6;">{features.get('silence_ratio', 0) * 100:.0f}%</span>
+            </div>
+            <div style="background: rgba(255,255,255,0.01); padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.04); text-align: center;">
+                <span style="color: #9ca3af; font-size: 0.75rem; display: block; margin-bottom: 0.25rem;">Темп речи</span>
+                <span style="font-size: 1.1rem; font-weight: 600; color: #f3f4f6;">{features.get('tempo_bpm', 0)} BPM</span>
+            </div>
+        </div>
+    </div>
+    """
+    
+    comp_score = 0
+    if compliance["greeting"]: comp_score += 1
+    if compliance["goodbye"]: comp_score += 1
+    if compliance["politeness"]: comp_score += 1
+    if compliance["no_stop_words"]: comp_score += 1
+    
+    now = time.strftime("%H:%M:%S")
+    call_history.append({
+        "time": now,
+        "duration": f"{features.get('duration', 0)} с",
+        "compliance": f"{comp_score}/4",
+        "stress": f"{res['final_stress'] * 100:.0f}%",
+        "status": status_text
+    })
+    
+    return report_html, generate_history_html()
+
+def predict(audio):
+    if audio is None:
+        return """
+        <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 1rem; color: #f87171; text-align: center;">
+            ⚠️ Пожалуйста, запишите или загрузите аудиофайл.
+        </div>
+        """, generate_history_html()
+        
+    res = pipeline.run_analysis(audio)
+    
+    stress = res['final_stress']
+    if stress >= 0.7:
+        stress_class = "stress-high"
+        badge_class = "badge-stress-high"
+        status_text = "Критический стресс / Аномалия"
+        gauge_color = "#ef4444"
+        timeline_main_color = "#ef4444"
+    elif stress >= 0.4:
+        stress_class = "stress-med"
+        badge_class = "badge-stress-med"
+        status_text = "Повышенное волнение"
+        gauge_color = "#f59e0b"
+        timeline_main_color = "#f59e0b"
+    else:
+        stress_class = "stress-low"
+        badge_class = "badge-stress-low"
+        status_text = "Нормальное / Стабильное состояние"
+        gauge_color = "#10b981"
+        timeline_main_color = "#10b981"
+        
+    features = res['features']
+    compliance = check_compliance(res['transcription'])
+    recs = generate_recommendations(res, compliance)
+    
+    c_greeting_icon = "✓" if compliance["greeting"] else "✗"
+    c_greeting_color = "#10b981" if compliance["greeting"] else "#ef4444"
+    c_greeting_desc = "Найдено слово приветствия" if compliance["greeting"] else "Приветствие отсутствует"
+    timeline_greeting_color = "#10b981" if compliance["greeting"] else "#ef4444"
+    
+    c_goodbye_icon = "✓" if compliance["goodbye"] else "✗"
+    c_goodbye_color = "#10b981" if compliance["goodbye"] else "#ef4444"
+    c_goodbye_desc = "Найдено слово прощания" if compliance["goodbye"] else "Прощание отсутствует"
+    timeline_goodbye_color = "#10b981" if compliance["goodbye"] else "#ef4444"
+    
+    c_politeness_icon = "✓" if compliance["politeness"] else "✗"
+    c_politeness_color = "#10b981" if compliance["politeness"] else "#ef4444"
+    c_politeness_desc = "Вежливые слова найдены" if compliance["politeness"] else "Добавьте больше вежливых фраз"
+    
+    c_stops_icon = "✓" if compliance["no_stop_words"] else "✗"
+    c_stops_color = "#10b981" if compliance["no_stop_words"] else "#ef4444"
+    c_stops_desc = "Токсичные стоп-слова не обнаружены" if compliance["no_stop_words"] else f"Обнаружено: {', '.join(compliance['found_stops'])}"
+    
+    recs_html = "".join([f"<li style='margin-bottom: 0.5rem;'>{r}</li>" for r in recs])
+    highlighted_transcription = highlight_keywords(res['transcription'])
+    
+    report_html = f"""
+    <div class="report-card {stress_class}" style="font-family: 'Outfit', sans-serif; padding: 1.5rem; background: rgba(10, 15, 26, 0.65); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 16px; backdrop-filter: blur(12px); color: #f3f4f6;">
+        
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 1.25rem; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+            <div>
+                <h3 style="margin: 0; font-size: 1.4rem; font-weight: 700; background: linear-gradient(to right, #60a5fa, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">📊 Результат Экспресс-Анализа</h3>
+                <span style="color: #9ca3af; font-size: 0.85rem;">Звонок обработан распределенной нейросетью</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <div style="text-align: right;">
+                    <span style="font-size: 0.75rem; color: #9ca3af; display: block; text-transform: uppercase; letter-spacing: 0.05em;">Индекс аномалии</span>
+                    <span style="font-size: 1.8rem; font-weight: 800; color: {gauge_color};">{res['final_stress'] * 100:.0f}%</span>
+                </div>
+                <span class="metric-badge {badge_class}" style="font-size: 0.9rem; padding: 0.4rem 1rem;">{status_text}</span>
+            </div>
         </div>
         
         <!-- Советник ИИ -->
@@ -586,16 +820,36 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
                     )
                     btn = gr.Button("🚀 Запустить распределенный анализ", variant="primary")
                     
+                    gr.Markdown("### 🎭 Быстрый старт (Тестовые сценарии)")
+                    with gr.Row():
+                        sim_btn_1 = gr.Button("🟢 Пример 1 (Вежливый)", variant="secondary")
+                        sim_btn_2 = gr.Button("🔴 Пример 2 (Конфликт)", variant="secondary")
+                        sim_btn_3 = gr.Button("🟡 Пример 3 (Волнение)", variant="secondary")
+                    
                 with gr.Column(scale=6):
                     gr.Markdown("### 📊 Отчет анализатора")
                     output_html = gr.HTML(
                         value="""
                         <div style="border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px; padding: 3rem; text-align: center; color: #9ca3af;">
-                            Ожидание входных данных. Запишите аудио и нажмите кнопку «Запустить анализ».
+                            Ожидание входных данных. Запишите аудио и нажмите кнопку «Запустить анализ» или выберите тестовый сценарий для демонстрации.
                         </div>
                         """
                     )
-            btn.click(fn=predict, inputs=[audio_in], outputs=[output_html])
+            
+            gr.Markdown("### 📜 Журнал звонков за сессию")
+            history_table = gr.HTML(value=generate_history_html())
+            
+            # Логика событий
+            btn.click(fn=predict, inputs=[audio_in], outputs=[output_html, history_table])
+            
+            # Функции-обертки для демо-кнопок
+            def load_sim1(): return run_simulation(1)
+            def load_sim2(): return run_simulation(2)
+            def load_sim3(): return run_simulation(3)
+            
+            sim_btn_1.click(fn=load_sim1, inputs=[], outputs=[output_html, history_table])
+            sim_btn_2.click(fn=load_sim2, inputs=[], outputs=[output_html, history_table])
+            sim_btn_3.click(fn=load_sim3, inputs=[], outputs=[output_html, history_table])
             
         # Вкладка 2: Настройка распределения
         with gr.Tab("⚙️ Распределение вычислений"):
