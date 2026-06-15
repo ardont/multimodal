@@ -41,7 +41,18 @@ if %errorlevel% neq 0 (
 )
 echo [OK] Обновление успешно стянуто.
 
-echo [5/5] Проверка текущей версии проекта...
+echo [5/6] Обновление зависимостей в виртуальном окружении...
+if exist .venv_full (
+    echo Обнаружено окружение .venv_full. Обновление пакетов...
+    call .venv_full\Scripts\activate.bat
+    pip install -r requirements.txt
+) else if exist .venv_light (
+    echo Обнаружено окружение .venv_light. Обновление пакетов...
+    call .venv_light\Scripts\activate.bat
+    pip install -r requirements_light.txt
+)
+
+echo [6/6] Проверка текущей версии проекта...
 echo ---------------------------------------------------
 echo Текущая активная версия на этом компьютере:
 git log -1 --format="Коммит: %%h%%nАвтор: %%an%%nДата:  %%ad%%nТема:  %%s"
