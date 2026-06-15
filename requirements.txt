@@ -10,4 +10,4 @@ python-dotenv
 fastapi
 uvicorn
 requests
-gigaam
+git+https://github.com/salute-developers/GigaAM.git
