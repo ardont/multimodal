@@ -4,13 +4,53 @@ import tempfile
 import time
 import psutil
 import uvicorn
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 from pydantic import BaseModel
 import gradio as gr
+
+import sqlite3
+import hashlib
+import re
 
 import config
 from src.pipeline import MultimodalPipeline
 import src.network as network
+
+DB_PATH = "gpb_mer.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL
+    )
+    """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS calls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        operator_username TEXT,
+        timestamp TEXT NOT NULL,
+        duration REAL,
+        stress_score REAL,
+        compliance_score REAL,
+        summary TEXT,
+        transcription TEXT
+    )
+    """)
+    cursor.execute("SELECT COUNT(*) FROM users")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+                       ("operator", hashlib.sha256("operator".encode()).hexdigest(), "user"))
+        cursor.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+                       ("admin", hashlib.sha256("admin".encode()).hexdigest(), "admin"))
+    conn.commit()
+    conn.close()
+
+init_db()
 
 # Инициализируем FastAPI
 app = FastAPI(title="GPB MER Distributed Node API", version="1.0.0")
@@ -25,6 +65,46 @@ call_history = []
 
 class TextRequest(BaseModel):
     text: str
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/api/login")
+async def api_login(req: LoginRequest):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    phash = hashlib.sha256(req.password.encode()).hexdigest()
+    cursor.execute("SELECT role FROM users WHERE username = ? AND password_hash = ?", (req.username, phash))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {"success": True, "role": row[0], "username": req.username}
+    return {"success": False, "error": "Неверный логин или пароль"}
+
+@app.get("/api/history")
+async def api_history(username: str = None, role: str = None):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    if role == "admin":
+        cursor.execute("SELECT operator_username, timestamp, duration, stress_score, compliance_score, summary, transcription FROM calls ORDER BY id DESC")
+    else:
+        cursor.execute("SELECT operator_username, timestamp, duration, stress_score, compliance_score, summary, transcription FROM calls WHERE operator_username = ? ORDER BY id DESC", (username,))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    history = []
+    for r in rows:
+        history.append({
+            "operator": r[0],
+            "timestamp": r[1],
+            "duration": r[2],
+            "stress_score": r[3],
+            "compliance_score": r[4],
+            "summary": r[5],
+            "transcription": r[6]
+        })
+    return history
 
 @app.get("/api/status")
 async def get_status():
@@ -76,6 +156,45 @@ async def api_audio(file: UploadFile = File(...)):
     try:
         res = pipeline.audio_ai.analyze(temp_path)
         return res
+    finally:
+        try:
+            os.unlink(temp_path)
+        except Exception:
+            pass
+
+@app.post("/api/analyze")
+async def api_analyze(file: UploadFile = File(...), operator: str = Form(None)):
+    """Выполняет полный мультимодальный анализ загруженного аудиофайла (ASR, текст, звук + late fusion)."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp:
+        shutil.copyfileobj(file.file, temp)
+        temp_path = temp.name
+    try:
+        res = pipeline.run_analysis(temp_path)
+        # Добавляем расчеты комплаенса для мобильного клиента
+        res["compliance"] = check_compliance(res["transcription"])
+        # Добавляем суммаризацию
+        res["summary"] = generate_summary(res["transcription"], res, res["compliance"])
+        
+        # Сохраняем в историю, если указан оператор
+        if operator:
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                comp = res["compliance"]
+                comp_score = (int(comp["greeting"]) + int(comp["goodbye"]) + int(comp["politeness"]) + int(comp["no_stop_words"])) / 4.0
+                cursor.execute(
+                    "INSERT INTO calls (operator_username, timestamp, duration, stress_score, compliance_score, summary, transcription) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (operator, time.strftime("%Y-%m-%d %H:%M:%S"), res["features"]["duration"], float(res["final_stress"]), comp_score, res["summary"], res["transcription"])
+                )
+                conn.commit()
+                conn.close()
+            except Exception as ex:
+                print(f"[DB Error] Не удалось сохранить историю звонка: {ex}")
+                
+        return res
+    except Exception as e:
+        print(f"[API] Ошибка полного анализа файла: {e}")
+        return {"error": str(e)}
     finally:
         try:
             os.unlink(temp_path)
@@ -334,6 +453,77 @@ def check_compliance(text):
         "no_stop_words": not has_stop_words,
         "found_stops": found_stops
     }
+
+def generate_summary(text, res, compliance):
+    if not text.strip():
+        return "Диалог пуст или не распознан."
+        
+    summary_lines = []
+    
+    # 1. Общий вердикт по стрессу
+    final_stress = res.get("final_stress", 0.0)
+    stress_status = "Низкий"
+    if final_stress > 0.6:
+        stress_status = "Критический 🚨"
+    elif final_stress > 0.35:
+        stress_status = "Умеренный ⚠️"
+        
+    summary_lines.append(f"📊 **Итог анализа:** Общий уровень стресса: {int(final_stress * 100)}% ({stress_status}).")
+    
+    # 2. Соблюдение регламента
+    passed_rules = []
+    failed_rules = []
+    
+    if compliance.get("greeting"): passed_rules.append("Приветствие")
+    else: failed_rules.append("Приветствие")
+    
+    if compliance.get("goodbye"): passed_rules.append("Прощание")
+    else: failed_rules.append("Прощание")
+    
+    if compliance.get("politeness"): passed_rules.append("Вежливость")
+    else: failed_rules.append("Вежливость")
+    
+    if compliance.get("no_stop_words"): passed_rules.append("Отсутствие стоп-слов")
+    else: failed_rules.append(f"Обнаружены стоп-слова ({', '.join(compliance.get('found_stops', []))})")
+    
+    if passed_rules:
+        summary_lines.append(f"✅ **Соблюдено:** {', '.join(passed_rules)}.")
+    if failed_rules:
+        summary_lines.append(f"❌ **Нарушено:** {', '.join(failed_rules)}.")
+        
+    # 3. Ключевые моменты (выделение важных предложений)
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    key_sentences = []
+    
+    keywords = ["карта", "счет", "кредит", "ошибка", "проблема", "заблокировано", "деньги", "перевод", "пароль", "договор", "заявление"]
+    
+    for s in sentences:
+        s_clean = s.strip()
+        if not s_clean:
+            continue
+        s_lower = s_clean.lower()
+        if any(kw in s_lower for kw in keywords) or any(st in s_lower for st in ["вы должны", "ваша проблема", "не знаю", "ужас", "бред", "заткнись"]):
+            key_sentences.append(f"• {s_clean}")
+            
+    if key_sentences:
+        summary_lines.append("\n📌 **Ключевые моменты разговора:**")
+        summary_lines.extend(key_sentences[:4])
+    else:
+        non_empty = [s.strip() for s in sentences if s.strip()]
+        if non_empty:
+            summary_lines.append("\n📌 **Ключевые моменты разговора:**")
+            for s in non_empty[:2]:
+                summary_lines.append(f"• {s}")
+                
+    # 4. Рекомендация
+    if final_stress > 0.4:
+        summary_lines.append("\n💡 **Рекомендация:** У оператора зафиксирован повышенный стресс. Рекомендуется сделать перерыв или разобрать диалог с супервизором.")
+    elif not compliance.get("greeting") or not compliance.get("goodbye"):
+        summary_lines.append("\n💡 **Рекомендация:** Обратить внимание на соблюдение обязательных фраз приветствия и прощания.")
+    else:
+        summary_lines.append("\n💡 **Рекомендация:** Диалог проведен отлично, регламент полностью соблюден.")
+        
+    return "\n".join(summary_lines)
 
 def generate_recommendations(res, compliance):
     recs = []

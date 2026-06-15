@@ -30,15 +30,15 @@ except ImportError:
 
 # Выбранные предобученные модели
 # Для ASR (Распознавание речи)
-ASR_MODEL_NAME = "openai/whisper-tiny"  # tiny быстрее загружается и меньше весит
+ASR_MODEL_NAME = "v3_e2e_ctc"  # GigaAM v3 с пунктуацией и нормализацией
 
 # Для анализа эмоций по тексту (Sentiment/Emotion на русском)
 # Установили полностью открытую сверхлегкую модель Rubert-Tiny2 от seara
 TEXT_MODEL_NAME = "seara/rubert-tiny2-russian-sentiment"
 
 # Для анализа эмоций по аудио (Speech Emotion Recognition)
-# Заменили на лучшую русскоязычную SOTA-модель от Aniemore
-AUDIO_MODEL_NAME = "Aniemore/wav2vec2-xlsr-53-russian-emotion-recognition"
+AUDIO_MODEL_NAME = "emo"  # GigaAM-Emo для распознавания эмоций
+
 
 # --- СЕТЕВЫЕ НАСТРОЙКИ (Tailscale / VPN) ---
 # Порт для запуска FastAPI + Gradio сервера

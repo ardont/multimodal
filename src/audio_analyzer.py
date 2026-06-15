@@ -6,11 +6,13 @@ class AudioEmotionAnalyzer:
     def __init__(self):
         if config.MOCK_MODE:
             print("[Audio AI] [MOCK] Загрузка аудио-анализатора...")
-            self.pipe = None
+            self.model = None
         else:
-            from transformers import pipeline
-            print(f"[Audio AI] Загрузка модели {config.AUDIO_MODEL_NAME} на device={config.DEVICE}...")
-            self.pipe = pipeline("audio-classification", model=config.AUDIO_MODEL_NAME, device=config.DEVICE)
+            import gigaam
+            # Безопасно сопоставляем имя устройства для torch/gigaam
+            device = "cuda" if "cuda" in getattr(config, "DEVICE_STR", "") else "cpu"
+            print(f"[Audio AI] Загрузка модели {config.AUDIO_MODEL_NAME} на device={device}...")
+            self.model = gigaam.load_model(config.AUDIO_MODEL_NAME, device=device, fp16_encoder=(device == "cuda"))
             print("[Audio AI] Готово.")
 
     def extract_acoustic_features(self, audio_path):
@@ -103,15 +105,13 @@ class AudioEmotionAnalyzer:
                 "features": features
             }
             
-        # Инференс реальной модели
-        outputs = self.pipe(audio_path)
-        scores = {item['label'].lower(): item['score'] for item in outputs}
+        # Инференс реальной модели GigaAM-Emo
+        scores = self.model.get_probs(audio_path)
         
         # Маппинг под категории стресса/аномалии
-        # Классы в harshit345/xlsr-wav2vec-speech-emotion-recognition:
-        # angry, disgust, fear, happy, neutral, sad, surprise
-        stress_keys = ['angry', 'disgust', 'fear', 'sad']
-        neutral_keys = ['neutral', 'happy', 'surprise']
+        # GigaAM-Emo возвращает: angry, sad, neutral, positive
+        stress_keys = ['angry', 'sad']
+        neutral_keys = ['neutral', 'positive']
         
         stress_score = sum(scores.get(k, 0.0) for k in stress_keys)
         neutral_score = sum(scores.get(k, 0.0) for k in neutral_keys)

@@ -5,12 +5,13 @@ class SpeechToText:
     def __init__(self):
         if config.MOCK_MODE:
             print("[ASR] [MOCK] Загрузка модели заглушки...")
-            self.pipe = None
+            self.model = None
         else:
-            from transformers import pipeline
-            print(f"[ASR] Загрузка модели {config.ASR_MODEL_NAME} на device={config.DEVICE}...")
-            # Загружаем пайплайн ASR
-            self.pipe = pipeline("automatic-speech-recognition", model=config.ASR_MODEL_NAME, device=config.DEVICE)
+            import gigaam
+            # Безопасно сопоставляем имя устройства для torch/gigaam
+            device = "cuda" if "cuda" in getattr(config, "DEVICE_STR", "") else "cpu"
+            print(f"[ASR] Загрузка модели {config.ASR_MODEL_NAME} на device={device}...")
+            self.model = gigaam.load_model(config.ASR_MODEL_NAME, device=device, fp16_encoder=(device == "cuda"))
             print("[ASR] Готово.")
 
     def transcribe(self, audio_path):
@@ -29,5 +30,5 @@ class SpeechToText:
             # Для демо-интерфейса случайный выбор делает приложение «живым»
             return random.choice(mock_texts)
         
-        result = self.pipe(audio_path)
-        return result.get("text", "")
+        return self.model.transcribe(audio_path)
+
