@@ -6,6 +6,11 @@ import config
 
 class MultimodalPipeline:
     def __init__(self):
+        # Проверяем и скачиваем модели GigaAM перед загрузкой, если мы работаем в реальном режиме
+        if not config.MOCK_MODE:
+            from .downloader import ensure_gigaam_models
+            ensure_gigaam_models()
+            
         # Инициализируем локальные модели.
         # Они лениво подгружаются или создают заглушки в зависимости от config.MOCK_MODE.
         self.asr = SpeechToText()
