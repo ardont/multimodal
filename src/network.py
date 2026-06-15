@@ -2,15 +2,27 @@ import requests
 import time
 import os
 
+def _normalize_address(address):
+    """Добавляет порт по умолчанию (7860), если он не указан."""
+    if not address:
+        return ""
+    address = address.strip()
+    if ":" not in address:
+        import config
+        port = getattr(config, "PORT", 7860)
+        address = f"{address}:{port}"
+    return address
+
 def ping_node(address):
     """
     Проверяет доступность узла и возвращает системную информацию и пинг.
     address: строка вида "IP:PORT" (например, "127.0.0.1:7860")
     """
+    address = _normalize_address(address)
     if not address:
         return {"status": "Offline", "ping": None}
         
-    url = f"http://{address.strip()}/api/status"
+    url = f"http://{address}/api/status"
     start_time = time.time()
     try:
         response = requests.get(url, timeout=2.5)
@@ -37,10 +49,11 @@ def remote_asr(address, audio_path):
     """
     Отправляет аудиофайл на удаленный узел для распознавания текста (ASR).
     """
-    if not audio_path or not os.path.exists(audio_path):
+    address = _normalize_address(address)
+    if not address or not audio_path or not os.path.exists(audio_path):
         return ""
         
-    url = f"http://{address.strip()}/api/asr"
+    url = f"http://{address}/api/asr"
     try:
         with open(audio_path, 'rb') as f:
             files = {'file': (os.path.basename(audio_path), f, 'audio/wav')}
@@ -58,10 +71,11 @@ def remote_text_analysis(address, text):
     """
     Отправляет текст на удаленный узел для анализа эмоций.
     """
-    if not text:
+    address = _normalize_address(address)
+    if not address or not text:
         return {"stress": 0.0, "neutral": 1.0}
         
-    url = f"http://{address.strip()}/api/text"
+    url = f"http://{address}/api/text"
     try:
         response = requests.post(url, json={"text": text}, timeout=10)
         if response.status_code == 200:
@@ -77,10 +91,11 @@ def remote_audio_analysis(address, audio_path):
     """
     Отправляет аудиофайл на удаленный узел для извлечения акустики и анализа эмоций по звуку.
     """
-    if not audio_path or not os.path.exists(audio_path):
+    address = _normalize_address(address)
+    if not address or not audio_path or not os.path.exists(audio_path):
         return {"stress": 0.0, "neutral": 1.0, "features": {}}
         
-    url = f"http://{address.strip()}/api/audio"
+    url = f"http://{address}/api/audio"
     try:
         with open(audio_path, 'rb') as f:
             files = {'file': (os.path.basename(audio_path), f, 'audio/wav')}

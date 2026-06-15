@@ -305,6 +305,10 @@ def add_new_node(address):
             gr.update(), gr.update(), gr.update(), 
             '<div style="color: #ef4444;">Ошибка: Адрес узла не может быть пустым.</div>'
         )
+    # Автоматически добавляем порт, если он пропущен
+    if ":" not in address:
+        address = f"{address}:{config.PORT}"
+        
     if address not in config.KNOWN_NODES:
         config.KNOWN_NODES.append(address)
     
