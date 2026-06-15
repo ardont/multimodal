@@ -14,6 +14,7 @@ echo [OK] Виртуальное окружение .venv_full создано.
 echo Активация окружения и установка зависимостей...
 call .venv_full\Scripts\activate.bat
 python -m pip install --upgrade pip
+pip uninstall -y gigaam
 pip install -r requirements.txt
 if %errorlevel% neq 0 (
     echo [ERROR] Ошибка установки зависимостей.
