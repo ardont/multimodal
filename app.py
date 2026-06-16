@@ -486,42 +486,125 @@ def refresh_nodes_status():
     html += '</div>'
     return html
 
-def load_compliance_rules():
+def load_compliance_rules(template_name="Стандартный"):
     default_rules = {
         "greetings": ["здравствуй", "добрый день", "доброе утро", "добрый вечер", "приветствую", "алло", "слушаю"],
-        "goodbyes": ["до свидания", "всего доброго", "всего хорошего", "до встречи", "хорошего дня", "пока"],
+        "goodbyes": ["до свидания", "всего (доброго|хорошего)", "до встречи", "хорошего дня", "пока"],
         "politeness": ["спасибо", "пожалуйста", "благодарю", "извините", "прошу прощения", "рад помочь"],
         "stop_words": ["вы должны", "ваша проблема", "не знаю", "ужас", "бред", "заткнись", "заткнитесь", "глупость"]
     }
     
-    rules_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compliance_templates.json")
-    if os.path.exists(rules_path):
+    mapping = {
+        "Стандартный": "standard.json",
+        "Юридический": "legal.json",
+        "Образовательный": "educational.json"
+    }
+    
+    templates_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compliance_templates")
+    os.makedirs(templates_dir, exist_ok=True)
+    
+    # Автогенерация шаблонов, если их нет
+    standard_path = os.path.join(templates_dir, "standard.json")
+    if not os.path.exists(standard_path):
         try:
             import json
-            with open(rules_path, "r", encoding="utf-8") as f:
+            with open(standard_path, "w", encoding="utf-8") as f:
+                json.dump(default_rules, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+            
+    legal_path = os.path.join(templates_dir, "legal.json")
+    if not os.path.exists(legal_path):
+        try:
+            import json
+            legal_rules = {
+                "greetings": ["уважаемый суд", "суд идет", "честь имею", "здравствуй", "добрый день", "доброе утро", "приветствую"],
+                "goodbyes": ["заседание закрыто", "до свидания", "всего (доброго|хорошего)", "до встречи"],
+                "politeness": ["прошу слова", "возражение", "спасибо", "пожалуйста", "извините", "уважаемый коллеги"],
+                "stop_words": ["лжесвидетельство", "давай договоримся", "взятка", "клевета", "бред", "заткнись", "заткнитесь"]
+            }
+            with open(legal_path, "w", encoding="utf-8") as f:
+                json.dump(legal_rules, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+            
+    educational_path = os.path.join(templates_dir, "educational.json")
+    if not os.path.exists(educational_path):
+        try:
+            import json
+            educational_rules = {
+                "greetings": ["здравствуйте, (коллеги|студенты)", "добрый день", "здравствуй", "приветствую", "доброе утро"],
+                "goodbyes": ["до свидания", "всего (доброго|хорошего)", "до следующей лекции", "увидимся на зачете", "до встречи"],
+                "politeness": ["спасибо", "пожалуйста", "благодарю", "будьте добры", "извините", "прошу прощения"],
+                "stop_words": ["списать", "шпаргалка", "бред", "заткнись", "заткнитесь", "глупость", "не сдал"]
+            }
+            with open(educational_path, "w", encoding="utf-8") as f:
+                json.dump(educational_rules, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+            
+    file_name = mapping.get(template_name, "standard.json")
+    file_path = os.path.join(templates_dir, file_name)
+    
+    loaded_rules = default_rules.copy()
+    if os.path.exists(file_path):
+        try:
+            import json
+            with open(file_path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
-                if all(k in loaded for k in default_rules.keys()):
-                    return loaded
+                for k in ["greetings", "goodbyes", "politeness", "stop_words"]:
+                    if k in loaded and isinstance(loaded[k], list):
+                        loaded_rules[k] = loaded[k]
         except Exception as e:
             print(f"[Rules Load Warning] {e}")
             
-    return default_rules
+    compiled_rules = {}
+    for key in ["greetings", "goodbyes", "politeness", "stop_words"]:
+        compiled_list = []
+        for pattern in loaded_rules.get(key, []):
+            try:
+                compiled_list.append(re.compile(pattern, re.IGNORECASE))
+            except re.error as e:
+                print(f"[Regex Validation Warning] Pattern '{pattern}' in {template_name} is invalid: {e}. Falling back to text matching.")
+                compiled_list.append(re.compile(re.escape(pattern), re.IGNORECASE))
+        compiled_rules[key] = compiled_list
+        
+    compiled_rules["raw_stop_words"] = loaded_rules.get("stop_words", [])
+    return compiled_rules
 
-def check_compliance(text):
+def check_compliance(text, template_name="Стандартный"):
     text_lower = text.lower()
-    rules = load_compliance_rules()
-    greetings = rules.get("greetings", [])
-    goodbyes = rules.get("goodbyes", [])
-    politeness = rules.get("politeness", [])
-    stop_words = rules.get("stop_words", [])
+    rules = load_compliance_rules(template_name)
     
-    has_greeting = any(g in text_lower for g in greetings)
-    has_goodbye = any(g in text_lower for g in goodbyes)
-    has_politeness = any(p in text_lower for p in politeness)
-    has_stop_words = any(s in text_lower for s in stop_words)
+    has_greeting = False
+    for rx in rules.get("greetings", []):
+        if rx.search(text_lower):
+            has_greeting = True
+            break
+            
+    has_goodbye = False
+    for rx in rules.get("goodbyes", []):
+        if rx.search(text_lower):
+            has_goodbye = True
+            break
+            
+    has_politeness = False
+    for rx in rules.get("politeness", []):
+        if rx.search(text_lower):
+            has_politeness = True
+            break
+            
+    found_stops = []
+    has_stop_words = False
+    raw_stops = rules.get("raw_stop_words", [])
+    compiled_stops = rules.get("stop_words", [])
     
-    found_stops = [s for s in stop_words if s in text_lower]
-    
+    for pattern, rx in zip(raw_stops, compiled_stops):
+        if rx.search(text_lower):
+            has_stop_words = True
+            match = rx.search(text_lower)
+            found_stops.append(match.group(0))
+            
     return {
         "greeting": has_greeting,
         "goodbye": has_goodbye,
@@ -885,7 +968,7 @@ def get_file_md5(file_path):
     except Exception:
         return None
 
-def format_report_html(res, is_simulation=False, speaker_filter="Все участники", add_to_history=False, options=None):
+def format_report_html(res, is_simulation=False, speaker_filter="Все участники", add_to_history=False, options=None, speaker_a="Спикер А", speaker_b="Спикер Б", template_name="Стандартный"):
     stress = res['final_stress']
     if stress >= 0.7:
         stress_class = "stress-high"
@@ -939,16 +1022,16 @@ def format_report_html(res, is_simulation=False, speaker_filter="Все учас
             p_text = p.get("text", "")
             
             # Интеллектуальный совет к реплике
-            if "клиент" in p_spk.lower() or "спикер б" in p_spk.lower():
+            if (p_spk == speaker_b) or ("клиент" in p_spk.lower()) or ("спикер б" in p_spk.lower()) or ("спикер b" in p_spk.lower()):
                 if p_stress >= 0.7:
-                    p_tip = "Клиент проявляет агрессию. Оператору следует извиниться, не перебивать и предложить альтернативу."
+                    p_tip = f"{speaker_b} проявляет агрессию. Следует извиниться, не перебивать и предложить альтернативу."
                 else:
-                    p_tip = "Клиент раздражен. Проявите эмпатию и снизьте темп разговора."
+                    p_tip = f"{speaker_b} раздражен. Проявите эмпатию и снизьте темп разговора."
             else:
                 if p_stress >= 0.7:
-                    p_tip = "Критический стресс оператора. Сделайте паузу после звонка и обратитесь к супервизору."
+                    p_tip = f"Критический стресс у {speaker_a}. Сделайте паузу после звонка."
                 else:
-                    p_tip = "Менеджер взволнован. Сделайте глубокий вдох и говорите спокойнее."
+                    p_tip = f"{speaker_a} взволнован. Сделайте глубокий вдох и говорите спокойнее."
                     
             peaks_html_list.append(f"""
             <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 0.65rem 0.85rem; display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.5rem; text-align: left;">
@@ -1027,25 +1110,25 @@ def format_report_html(res, is_simulation=False, speaker_filter="Все учас
         
         compliance = {"greeting": False, "goodbye": False, "politeness": False, "no_stop_words": False}
     else:
-        compliance = check_compliance(res['transcription'])
+        compliance = check_compliance(res['transcription'], template_name=template_name)
         
         if stress >= 0.7:
-            recs.append("🚨 <b>Критический стресс:</b> У оператора/клиента зафиксирован пик напряжения. Менеджеру рекомендуется сделать паузу и выпить воды.")
+            recs.append(f"🚨 <b>Критический стресс:</b> Зафиксирован пик эмоционального напряжения. {speaker_a} рекомендуется сделать паузу.")
         elif stress >= 0.4:
             recs.append("📈 <b>Повышенное волнение:</b> Старайтесь контролировать дыхание, сбавьте громкость и говорите ровным тоном.")
             
         tempo = features.get('tempo_bpm', 0)
         if tempo > 145:
-            recs.append(f"⚡ <b>Слишком быстрый темп речи ({tempo:.0f} BPM):</b> Скорость превышает норму. Говорите медленнее, делайте паузы для лучшего понимания.")
+            recs.append(f"⚡ <b>Слишком быстрый темп речи ({tempo:.0f} BPM):</b> Скорость превышает норму. Говорите медленнее, делайте паузы.")
         elif tempo < 70 and tempo > 0:
             recs.append(f"🐢 <b>Слишком медленный темп речи ({tempo:.0f} BPM):</b> Речь звучит пассивно. Постарайтесь говорить более динамично.")
             
         if not compliance["greeting"]:
-            recs.append("👋 <b>Нарушение регламента (Приветствие):</b> В диалоге отсутствует вежливое приветствие (например: <i>'Добрый день'</i>, <i>'Здравствуйте'</i>).")
+            recs.append("👋 <b>Нарушение регламента (Приветствие):</b> В диалоге отсутствует вежливое приветствие.")
         if not compliance["goodbye"]:
             recs.append("🤝 <b>Нарушение регламента (Прощание):</b> В конце разговора не зафиксировано вежливого прощания.")
         if not compliance["politeness"]:
-            recs.append("✨ <b>Рекомендация по вежливости:</b> Добавьте в диалог больше слов поддержки (<i>'спасибо', 'пожалуйста', 'рад помочь'</i>).")
+            recs.append("✨ <b>Рекомендация по вежливости:</b> Добавьте в диалог больше слов поддержки.")
         if not compliance["no_stop_words"]:
             stops_str = ", ".join([f"'{s}'" for s in compliance["found_stops"]])
             recs.append(f"⚠️ <b>Обнаружены стоп-слова ({stops_str}):</b> Данные фразы вызывают сопротивление. Замените их на конструктивные формулировки.")
@@ -1057,12 +1140,12 @@ def format_report_html(res, is_simulation=False, speaker_filter="Все учас
         
         c_greeting_icon = "✓" if compliance["greeting"] else "✗"
         c_greeting_color = "#10b981" if compliance["greeting"] else "#ef4444"
-        c_greeting_desc = "Найдено слово приветствия" if compliance["greeting"] else "Приветствие отсутствует"
+        c_greeting_desc = "Найдено приветствие" if compliance["greeting"] else "Приветствие отсутствует"
         timeline_greeting_color = "#10b981" if compliance["greeting"] else "#ef4444"
         
         c_goodbye_icon = "✓" if compliance["goodbye"] else "✗"
         c_goodbye_color = "#10b981" if compliance["goodbye"] else "#ef4444"
-        c_goodbye_desc = "Найдено слово прощания" if compliance["goodbye"] else "Прощание отсутствует"
+        c_goodbye_desc = "Найдено прощание" if compliance["goodbye"] else "Прощание отсутствует"
         timeline_goodbye_color = "#10b981" if compliance["goodbye"] else "#ef4444"
         
         c_politeness_icon = "✓" if compliance["politeness"] else "✗"
@@ -1089,11 +1172,11 @@ def format_report_html(res, is_simulation=False, speaker_filter="Все учас
             end = seg.get("end", 0.0)
             seg_stress = seg.get("final_stress", 0.0)
             
-            is_client = "клиент" in spk.lower() or "спикер b" in spk.lower() or "спикер б" in spk.lower()
+            is_client = (spk == speaker_b) or ("клиент" in spk.lower()) or ("спикер b" in spk.lower()) or ("спикер б" in spk.lower())
             
-            if speaker_filter == "Только Спикер А" and is_client:
+            if speaker_filter in ["Только Спикер А", speaker_a] and is_client:
                 continue
-            if speaker_filter == "Только Спикер Б" and not is_client:
+            if speaker_filter in ["Только Спикер Б", speaker_b] and not is_client:
                 continue
                 
             highlighted_txt = highlight_keywords(txt)
@@ -1296,7 +1379,10 @@ def filter_speakers_report(current_state, selected_filter):
     res = current_state["analysis_result"]
     is_simulation = current_state.get("is_simulation", False)
     options = current_state.get("options", {"enable_asr": True, "enable_audio_emo": True, "enable_coach": True})
-    return format_report_html(res, is_simulation=is_simulation, speaker_filter=selected_filter, add_to_history=False, options=options)
+    speaker_a = current_state.get("speaker_a", "Спикер А")
+    speaker_b = current_state.get("speaker_b", "Спикер Б")
+    template_name = current_state.get("template_name", "Стандартный")
+    return format_report_html(res, is_simulation=is_simulation, speaker_filter=selected_filter, add_to_history=False, options=options, speaker_a=speaker_a, speaker_b=speaker_b, template_name=template_name)
 
 def get_dejavu_font_path():
     try:
@@ -1365,8 +1451,14 @@ def export_pdf_report(current_state):
     res = current_state["analysis_result"]
     is_simulation = current_state.get("is_simulation", False)
     options = current_state.get("options", {"enable_asr": True, "enable_audio_emo": True, "enable_coach": True})
+    speaker_a = current_state.get("speaker_a", "Спикер А")
+    speaker_b = current_state.get("speaker_b", "Спикер Б")
+    template_name = current_state.get("template_name", "Стандартный")
     
-    html_content = format_report_html(res, is_simulation=is_simulation, speaker_filter="Все участники", add_to_history=False, options=options)
+    html_content = format_report_html(
+        res, is_simulation=is_simulation, speaker_filter="Все участники", 
+        add_to_history=False, options=options, speaker_a=speaker_a, speaker_b=speaker_b, template_name=template_name
+    )
     
     # Конвертируем в светлую тему
     light_html = convert_html_to_light_theme(html_content)
@@ -1422,6 +1514,10 @@ def export_pdf_report(current_state):
         <div style="text-align: right; color: #6b7280; font-size: 8pt; margin-bottom: 15px;">
             Сгенерировано системой Multimodal AI Speech
         </div>
+        <div style="font-family: 'DejaVuSans'; font-size: 10pt; color: #374151; margin-bottom: 15px; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px;">
+            <b>Роли участников:</b> Спикер А — {speaker_a}, Спикер Б — {speaker_b}<br/>
+            <b>Шаблон комплаенса:</b> {template_name}
+        </div>
         {light_html}
     </body>
     </html>
@@ -1450,6 +1546,9 @@ def export_txt_report(current_state):
         
     res = current_state["analysis_result"]
     options = current_state.get("options", {})
+    speaker_a = current_state.get("speaker_a", "Спикер А")
+    speaker_b = current_state.get("speaker_b", "Спикер Б")
+    template_name = current_state.get("template_name", "Стандартный")
     
     enable_asr = options.get("enable_asr", True)
     enable_audio_emo = options.get("enable_audio_emo", True)
@@ -1459,6 +1558,8 @@ def export_txt_report(current_state):
     lines.append("ОТЧЕТ ПО ЗВОНКУ (MULTIMODAL SPEECH ANALYSIS)")
     lines.append("=" * 60)
     lines.append(f"Дата/Время отчета: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"Роли участников: Спикер А — {speaker_a}, Спикер Б — {speaker_b}")
+    lines.append(f"Шаблон комплаенса: {template_name}")
     lines.append(f"Общий индекс аномалии: {res.get('final_stress', 0.0) * 100:.0f}%")
     lines.append(f"Текстовый стресс: {res.get('text_stress', 0.0) * 100:.0f}%")
     lines.append(f"Акустический стресс: {res.get('audio_stress', 0.0) * 100:.0f}%")
@@ -1473,7 +1574,7 @@ def export_txt_report(current_state):
         
     lines.append("-" * 60)
     lines.append("ИНТЕЛЛЕКТУАЛЬНЫЙ КОНСПЕКТ (SUMMARY):")
-    comp = check_compliance(res.get("transcription", "")) if enable_asr else {"greeting": False, "goodbye": False, "politeness": False, "no_stop_words": False}
+    comp = check_compliance(res.get("transcription", ""), template_name=template_name) if enable_asr else {"greeting": False, "goodbye": False, "politeness": False, "no_stop_words": False}
     lines.append(generate_summary(res.get("transcription", ""), res, comp, options=options))
     lines.append("=" * 60)
     
@@ -1482,7 +1583,7 @@ def export_txt_report(current_state):
     temp_txt.close()
     return temp_txt.name
 
-def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach):
+def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach, speaker_a="Спикер А", speaker_b="Спикер Б", template_name="Стандартный"):
     if not opt_asr:
         opt_coach = False
         
@@ -1504,7 +1605,7 @@ def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach):
                 {
                     "start": 0.0,
                     "end": 15.0,
-                    "speaker": "Спикер А",
+                    "speaker": speaker_a,
                     "text": text,
                     "audio_stress": 0.12,
                     "text_stress": 0.05,
@@ -1529,7 +1630,7 @@ def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach):
                 {
                     "start": 0.0,
                     "end": 18.0,
-                    "speaker": "Спикер Б",
+                    "speaker": speaker_b,
                     "text": text,
                     "audio_stress": 0.95,
                     "text_stress": 0.88,
@@ -1554,7 +1655,7 @@ def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach):
                 {
                     "start": 0.0,
                     "end": 22.0,
-                    "speaker": "Спикер Б",
+                    "speaker": speaker_b,
                     "text": text,
                     "audio_stress": 0.55,
                     "text_stress": 0.35,
@@ -1577,24 +1678,33 @@ def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach):
     state_val = {
         "analysis_result": res,
         "is_simulation": True,
-        "options": res["options"]
+        "options": res["options"],
+        "speaker_a": speaker_a,
+        "speaker_b": speaker_b,
+        "template_name": template_name
     }
     
-    report_html = format_report_html(res, is_simulation=True, speaker_filter="Все участники", add_to_history=True, options=state_val["options"])
+    report_html = format_report_html(
+        res, is_simulation=True, speaker_filter="Все участники", 
+        add_to_history=True, options=state_val["options"],
+        speaker_a=speaker_a, speaker_b=speaker_b, template_name=template_name
+    )
     if chart_path and os.path.exists(chart_path):
         chart_update = gr.update(value=chart_path, visible=True)
     else:
         chart_update = gr.update(visible=False)
         
-    return report_html, chart_update, generate_kpi_html(), generate_history_html(), state_val
+    # Также обновляем варианты выбора в Radio-фильтре
+    filter_update = gr.update(choices=["Все участники", speaker_a, speaker_b], value="Все участники")
+    return report_html, chart_update, generate_kpi_html(), generate_history_html(), state_val, filter_update
 
-def predict_wrapper(audio, opt_asr, opt_audio, opt_coach):
+def predict_wrapper(audio, opt_asr, opt_audio, opt_coach, speaker_a="Спикер А", speaker_b="Спикер Б", template_name="Стандартный"):
     if audio is None:
         return """
         <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 1rem; color: #f87171; text-align: center;">
             ⚠️ Пожалуйста, запишите или загрузите аудиофайл.
         </div>
-        """, gr.update(visible=False), generate_kpi_html(), generate_history_html(), None
+        """, gr.update(visible=False), generate_kpi_html(), generate_history_html(), None, gr.update()
         
     if not opt_asr:
         opt_coach = False
@@ -1606,7 +1716,7 @@ def predict_wrapper(audio, opt_asr, opt_audio, opt_coach):
         print(f"[CACHE HIT] Результат для {file_hash} взят из глобального кеша.")
         res = cached_res
     else:
-        res = pipeline.run_analysis(audio, enable_asr=opt_asr, enable_audio_emo=opt_audio, enable_coach=opt_coach)
+        res = pipeline.run_analysis(audio, enable_asr=opt_asr, enable_audio_emo=opt_audio, enable_coach=opt_coach, speaker_a=speaker_a, speaker_b=speaker_b)
         if file_hash:
             GLOBAL_MD5_CACHE[file_hash] = res
             
@@ -1619,17 +1729,26 @@ def predict_wrapper(audio, opt_asr, opt_audio, opt_coach):
     state_val = {
         "analysis_result": res,
         "is_simulation": False,
-        "options": res["options"]
+        "options": res["options"],
+        "speaker_a": speaker_a,
+        "speaker_b": speaker_b,
+        "template_name": template_name
     }
     
-    report_html = format_report_html(res, is_simulation=False, speaker_filter="Все участники", add_to_history=True, options=state_val["options"])
+    report_html = format_report_html(
+        res, is_simulation=False, speaker_filter="Все участники", 
+        add_to_history=True, options=state_val["options"],
+        speaker_a=speaker_a, speaker_b=speaker_b, template_name=template_name
+    )
     chart_path = res.get("chart_path")
     if chart_path and os.path.exists(chart_path):
         chart_update = gr.update(value=chart_path, visible=True)
     else:
         chart_update = gr.update(visible=False)
     
-    return report_html, chart_update, generate_kpi_html(), generate_history_html(), state_val
+    # Также обновляем варианты выбора в Radio-фильтре
+    filter_update = gr.update(choices=["Все участники", speaker_a, speaker_b], value="Все участники")
+    return report_html, chart_update, generate_kpi_html(), generate_history_html(), state_val, filter_update
 
 def toggle_mode(mode):
     if mode == "Поштучный (Single)":
@@ -1637,7 +1756,7 @@ def toggle_mode(mode):
     else:
         return gr.update(visible=False), gr.update(visible=False), gr.update(visible=True), gr.update(visible=True), gr.update(visible=False)
 
-def predict_batch_ui(files, opt_asr, opt_audio, opt_coach):
+def predict_batch_ui(files, opt_asr, opt_audio, opt_coach, speaker_a="Спикер А", speaker_b="Спикер Б", template_name="Стандартный"):
     if not files:
         return """
         <div style="border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px; padding: 3rem; text-align: center; color: #ef4444;">
@@ -1646,7 +1765,7 @@ def predict_batch_ui(files, opt_asr, opt_audio, opt_coach):
         """, gr.update(visible=False), generate_kpi_html(), generate_history_html()
         
     file_paths = [f.name if hasattr(f, "name") else f for f in files]
-    batch_res = pipeline.run_analysis_batch(file_paths, enable_asr=opt_asr, enable_audio_emo=opt_audio, enable_coach=opt_coach)
+    batch_res = pipeline.run_analysis_batch(file_paths, enable_asr=opt_asr, enable_audio_emo=opt_audio, enable_coach=opt_coach, speaker_a=speaker_a, speaker_b=speaker_b)
     
     rows = ""
     for idx, res in enumerate(batch_res):
@@ -1668,7 +1787,7 @@ def predict_batch_ui(files, opt_asr, opt_audio, opt_coach):
             advice = "Диалог проведен отлично"
             
         if opt_asr:
-            compliance = check_compliance(res.get("transcription", ""))
+            compliance = check_compliance(res.get("transcription", ""), template_name=template_name)
             comp_score = 0
             if compliance["greeting"]: comp_score += 1
             if compliance["goodbye"]: comp_score += 1
@@ -1821,6 +1940,16 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
                         opt_audio = gr.Checkbox(label="Анализ акустики (Emo)", value=True)
                         opt_coach = gr.Checkbox(label="AI Рекомендации (Coach)", value=True)
                     
+                    with gr.Row():
+                        spk_a_input = gr.Textbox(value="Спикер А", label="Имя Спикера А (Менеджер)")
+                        spk_b_input = gr.Textbox(value="Спикер Б", label="Имя Спикера Б (Клиент)")
+                        
+                    template_select = gr.Dropdown(
+                        choices=["Стандартный", "Юридический", "Образовательный"],
+                        value="Стандартный",
+                        label="Шаблон комплаенса"
+                    )
+                    
                     # Поштучный uploader
                     audio_in = gr.Audio(
                         sources=["microphone", "upload"], 
@@ -1879,12 +2008,12 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
             # Логика событий
             btn.click(
                 fn=predict_wrapper, 
-                inputs=[audio_in, opt_asr, opt_audio, opt_coach], 
-                outputs=[output_html, chart_img, kpi_dashboard, history_table, current_analysis_state]
+                inputs=[audio_in, opt_asr, opt_audio, opt_coach, spk_a_input, spk_b_input, template_select], 
+                outputs=[output_html, chart_img, kpi_dashboard, history_table, current_analysis_state, speaker_filter]
             )
             batch_btn.click(
                 fn=predict_batch_ui, 
-                inputs=[batch_in, opt_asr, opt_audio, opt_coach], 
+                inputs=[batch_in, opt_asr, opt_audio, opt_coach, spk_a_input, spk_b_input, template_select], 
                 outputs=[output_html, chart_img, kpi_dashboard, history_table]
             )
             
@@ -1896,13 +2025,28 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
             )
             
             # Функции-обертки для демо-кнопок
-            def load_sim1(opt_asr, opt_audio, opt_coach): return run_simulation_wrapper(1, opt_asr, opt_audio, opt_coach)
-            def load_sim2(opt_asr, opt_audio, opt_coach): return run_simulation_wrapper(2, opt_asr, opt_audio, opt_coach)
-            def load_sim3(opt_asr, opt_audio, opt_coach): return run_simulation_wrapper(3, opt_asr, opt_audio, opt_coach)
+            def load_sim1(opt_asr, opt_audio, opt_coach, spk_a, spk_b, template): 
+                return run_simulation_wrapper(1, opt_asr, opt_audio, opt_coach, spk_a, spk_b, template)
+            def load_sim2(opt_asr, opt_audio, opt_coach, spk_a, spk_b, template): 
+                return run_simulation_wrapper(2, opt_asr, opt_audio, opt_coach, spk_a, spk_b, template)
+            def load_sim3(opt_asr, opt_audio, opt_coach, spk_a, spk_b, template): 
+                return run_simulation_wrapper(3, opt_asr, opt_audio, opt_coach, spk_a, spk_b, template)
             
-            sim_btn_1.click(fn=load_sim1, inputs=[opt_asr, opt_audio, opt_coach], outputs=[output_html, chart_img, kpi_dashboard, history_table, current_analysis_state])
-            sim_btn_2.click(fn=load_sim2, inputs=[opt_asr, opt_audio, opt_coach], outputs=[output_html, chart_img, kpi_dashboard, history_table, current_analysis_state])
-            sim_btn_3.click(fn=load_sim3, inputs=[opt_asr, opt_audio, opt_coach], outputs=[output_html, chart_img, kpi_dashboard, history_table, current_analysis_state])
+            sim_btn_1.click(
+                fn=load_sim1, 
+                inputs=[opt_asr, opt_audio, opt_coach, spk_a_input, spk_b_input, template_select], 
+                outputs=[output_html, chart_img, kpi_dashboard, history_table, current_analysis_state, speaker_filter]
+            )
+            sim_btn_2.click(
+                fn=load_sim2, 
+                inputs=[opt_asr, opt_audio, opt_coach, spk_a_input, spk_b_input, template_select], 
+                outputs=[output_html, chart_img, kpi_dashboard, history_table, current_analysis_state, speaker_filter]
+            )
+            sim_btn_3.click(
+                fn=load_sim3, 
+                inputs=[opt_asr, opt_audio, opt_coach, spk_a_input, spk_b_input, template_select], 
+                outputs=[output_html, chart_img, kpi_dashboard, history_table, current_analysis_state, speaker_filter]
+            )
             
             # Легкая интерактивная фильтрация при изменении Radio-кнопки
             speaker_filter.change(

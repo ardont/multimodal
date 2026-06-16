@@ -79,7 +79,7 @@ class MultimodalPipeline:
         final_stress = w_text * text_stress + w_audio * audio_stress
         return round(float(final_stress), 2)
 
-    def _align_words_to_segments(self, words, segments, audio_path):
+    def _align_words_to_segments(self, words, segments, audio_path, speaker_a="Спикер А", speaker_b="Спикер Б"):
         """
         Выравнивает распознанные слова по интервалам спикеров из диаризатора.
         Если разметка слов пуста (например, при сбое), делает надежный откат
@@ -108,7 +108,7 @@ class MultimodalPipeline:
                         aligned.append({
                             "start": seg["start"],
                             "end": seg["end"],
-                            "speaker": "Оператор (Спикер А)" if spk == "Спикер A" else "Клиент (Спикер Б)",
+                            "speaker": speaker_a if spk == "Спикер A" else speaker_b,
                             "text": text
                         })
                 finally:
@@ -131,7 +131,7 @@ class MultimodalPipeline:
                 aligned_segments.append({
                     "start": seg["start"],
                     "end": seg["end"],
-                    "speaker": "Оператор (Спикер А)" if spk == "Спикер A" else "Клиент (Спикер Б)",
+                    "speaker": speaker_a if spk == "Спикер A" else speaker_b,
                     "text": " ".join(seg_words)
                 })
                 
@@ -141,7 +141,7 @@ class MultimodalPipeline:
             aligned_segments.append({
                 "start": 0.0,
                 "end": segments[-1]["end"] if segments else 5.0,
-                "speaker": "Оператор (Спикер А)",
+                "speaker": speaker_a,
                 "text": full_text
             })
             
@@ -227,7 +227,7 @@ class MultimodalPipeline:
             print(f"[Chart Error] Не удалось построить график: {e}")
             return None
 
-    def run_analysis(self, audio_path, enable_asr=True, enable_audio_emo=True, enable_coach=True):
+    def run_analysis(self, audio_path, enable_asr=True, enable_audio_emo=True, enable_coach=True, speaker_a="Спикер А", speaker_b="Спикер Б"):
         if not audio_path:
             return {
                 "transcription": "",
@@ -293,11 +293,11 @@ class MultimodalPipeline:
 
                 segments = diarize_audio(clean_wav_path)
                 mock_dialogue = [
-                    ("Спикер А", "Привет! Ты посмотрел мои правки в документе? Все ли там в порядке?", 0.10, 0.05),
-                    ("Спикер Б", "Да, привет. Посмотрел. В целом нормально, но есть пара критических замечаний.", 0.45, 0.25),
-                    ("Спикер А", "Понял. А что именно не так? Можешь подсказать, как лучше исправить?", 0.15, 0.10),
-                    ("Спикер Б", "В третьем разделе выводы слишком общие, это просто бред какой-то, нужно переписать конкретнее.", 0.85, 0.75),
-                    ("Спикер А", "Хорошо, я переделаю этот раздел сегодня и пришлю новую версию на проверку.", 0.20, 0.15)
+                    (speaker_a, "Привет! Ты посмотрел мои правки в документе? Все ли там в порядке?", 0.10, 0.05),
+                    (speaker_b, "Да, привет. Посмотрел. В целом нормально, но есть пара критических замечаний.", 0.45, 0.25),
+                    (speaker_a, "Понял. А что именно не так? Можешь подсказать, как лучше исправить?", 0.15, 0.10),
+                    (speaker_b, "В третьем разделе выводы слишком общие, это просто бред какой-то, нужно переписать конкретнее.", 0.85, 0.75),
+                    (speaker_a, "Хорошо, я переделаю этот раздел сегодня и пришлю новую версию на проверку.", 0.20, 0.15)
                 ]
                 
                 analyzed_segments = []
@@ -310,7 +310,7 @@ class MultimodalPipeline:
                         audio_stress = 0.0
                     
                     diarizer_speaker = seg.get("speaker", "Спикер A")
-                    final_speaker = "Спикер А" if diarizer_speaker == "Спикер A" else "Спикер Б"
+                    final_speaker = speaker_a if diarizer_speaker == "Спикер A" else speaker_b
                     
                     final_stress = self._get_fused_stress(
                         text, text_stress, audio_stress, 0.1, seg["end"]-seg["start"],
@@ -407,7 +407,7 @@ class MultimodalPipeline:
                         if "[Ошибка" in text_raw and config.FAILOVER_TO_LOCAL:
                             asr_res = self.asr.transcribe_with_timestamps(clean_wav_path)
                             
-                    aligned_segs = self._align_words_to_segments(asr_res.get("words", []), segments, clean_wav_path)
+                    aligned_segs = self._align_words_to_segments(asr_res.get("words", []), segments, clean_wav_path, speaker_a=speaker_a, speaker_b=speaker_b)
                     
                     texts_to_score = [s["text"] for s in aligned_segs]
                     if text_route == "local":
@@ -523,7 +523,7 @@ class MultimodalPipeline:
             except Exception:
                 pass
 
-    def run_analysis_batch(self, audio_paths, enable_asr=True, enable_audio_emo=True, enable_coach=True):
+    def run_analysis_batch(self, audio_paths, enable_asr=True, enable_audio_emo=True, enable_coach=True, speaker_a="Спикер А", speaker_b="Спикер Б"):
         """
         Пакетная обработка списка файлов. Группирует вызовы моделей,
         использует кеш, слияние без физической нарезки и шахматные потоки.
@@ -636,7 +636,7 @@ class MultimodalPipeline:
                     
                 aligned_files_segs = []
                 for asr_res, segs, clean_path in zip(asr_results, files_segments, clean_paths):
-                    aligned_files_segs.append(self._align_words_to_segments(asr_res["words"], segs, clean_path))
+                    aligned_files_segs.append(self._align_words_to_segments(asr_res["words"], segs, clean_path, speaker_a=speaker_a, speaker_b=speaker_b))
                     
                 all_segs_flat = []
                 all_texts_flat = []
