@@ -127,3 +127,58 @@ class AudioEmotionAnalyzer:
             "neutral": round(float(neutral_score), 2),
             "features": features
         }
+
+    def reduce_noise(self, input_path, output_path):
+        """
+        Спектральное вычитание шума (Spectral Subtraction) для очистки звука.
+        Читает input_path, очищает сигнал и записывает в output_path.
+        """
+        try:
+            import soundfile as sf
+            import scipy.signal
+            
+            y, sr = sf.read(input_path)
+            # Если стерео, усредняем в моно
+            if len(y.shape) > 1:
+                y = np.mean(y, axis=1)
+                
+            # Параметры STFT
+            nperseg = 1024
+            noverlap = 512
+            f, t, Zxx = scipy.signal.stft(y, fs=sr, nperseg=nperseg, noverlap=noverlap)
+            
+            # Шумовой профиль берем из первых 0.25 сек
+            noise_frames = int(0.25 * sr / (nperseg - noverlap))
+            if Zxx.shape[1] > noise_frames and noise_frames > 0:
+                noise_profile = np.mean(np.abs(Zxx[:, :noise_frames]), axis=1, keepdims=True)
+            else:
+                noise_profile = np.mean(np.abs(Zxx), axis=1, keepdims=True) * 0.1
+                
+            # Спектральное вычитание
+            Zxx_mag = np.abs(Zxx)
+            Zxx_phase = np.angle(Zxx)
+            
+            clean_mag = Zxx_mag - 1.5 * noise_profile
+            clean_mag = np.maximum(clean_mag, 0.02 * Zxx_mag)
+            
+            clean_Zxx = clean_mag * np.exp(1j * Zxx_phase)
+            _, clean_y = scipy.signal.istft(clean_Zxx, fs=sr, nperseg=nperseg, noverlap=noverlap)
+            
+            # Записываем результат
+            sf.write(output_path, clean_y, sr)
+            return True
+        except Exception as e:
+            print(f"[Audio AI] Ошибка спектрального шумоподавления: {e}")
+            try:
+                import shutil
+                shutil.copy2(input_path, output_path)
+            except Exception:
+                pass
+            return False
+
+    def analyze_batch(self, audio_paths):
+        """Пакетный анализ списка аудиофайлов."""
+        if not audio_paths:
+            return []
+        return [self.analyze(p) for p in audio_paths]
+

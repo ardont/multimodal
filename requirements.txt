@@ -12,3 +12,7 @@ uvicorn
 requests
 git+https://github.com/salute-developers/GigaAM.git
 imageio-ffmpeg
+matplotlib
+scipy
+pyannote.audio
+

@@ -862,7 +862,86 @@ def format_report_html(res, is_simulation=False):
         
     features = res['features']
     compliance = check_compliance(res['transcription'])
-    recs = generate_recommendations(res, compliance)
+    
+    # 1. Выделение ТОП-3 пиков эмоционального напряжения (QA Checklist)
+    all_segs = res.get("segments", [])
+    sorted_segs = sorted(all_segs, key=lambda s: s.get("final_stress", 0.0), reverse=True)
+    peaks = [s for s in sorted_segs if s.get("final_stress", 0.0) >= 0.35][:3]
+    
+    peaks_html_list = []
+    for p in peaks:
+        p_stress = p.get("final_stress", 0.0)
+        p_time_min = int(p["start"] // 60)
+        p_time_sec = int(p["start"] % 60)
+        p_time_str = f"{p_time_min}:{p_time_sec:02d}"
+        
+        p_icon = "🔴" if p_stress >= 0.7 else "🟡"
+        p_spk = p.get("speaker", "Спикер")
+        p_text = p.get("text", "")
+        
+        # Интеллектуальный совет к реплике
+        if "клиент" in p_spk.lower() or "спикер б" in p_spk.lower():
+            if p_stress >= 0.7:
+                p_tip = "Клиент проявляет агрессию. Оператору следует извиниться, не перебивать и предложить альтернативу."
+            else:
+                p_tip = "Клиент раздражен. Проявите эмпатию и снизьте темп разговора."
+        else:
+            if p_stress >= 0.7:
+                p_tip = "Критический стресс оператора. Сделайте паузу после звонка и обратитесь к супервизору."
+            else:
+                p_tip = "Менеджер взволнован. Сделайте глубокий вдох и говорите спокойнее."
+                
+        peaks_html_list.append(f"""
+        <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 0.65rem 0.85rem; display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.5rem; text-align: left;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; font-weight: bold;">
+                <span style="color: #60a5fa;">{p_icon} Реплика на {p_time_str} ({p_spk})</span>
+                <span style="color: {'#ef4444' if p_stress >= 0.7 else '#f59e0b'};">Стресс: {p_stress*100:.0f}%</span>
+            </div>
+            <span style="font-size: 0.85rem; color: #e5e7eb; line-height: 1.4;">"{p_text}"</span>
+            <span style="font-size: 0.75rem; color: #a78bfa; border-top: 1px dashed rgba(255,255,255,0.05); padding-top: 0.25rem; font-style: italic;"><b>Совет:</b> {p_tip}</span>
+        </div>
+        """)
+        
+    if not peaks_html_list:
+        peaks_html = """
+        <div style="text-align: center; color: #34d399; font-size: 0.8rem; padding: 0.85rem; background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.1); border-radius: 8px;">
+            ✓ Критических пиков стресса не зафиксировано. Диалог проведен спокойно.
+        </div>
+        """
+    else:
+        peaks_html = f"""
+        <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+            {"".join(peaks_html_list)}
+        </div>
+        """
+
+    # 2. Rule-based генерация советов AI Coach
+    recs = []
+    if stress >= 0.7:
+        recs.append("🚨 <b>Критический стресс:</b> У оператора/клиента зафиксирован пик напряжения. Менеджеру рекомендуется сделать паузу и выпить воды.")
+    elif stress >= 0.4:
+        recs.append("📈 <b>Повышенное волнение:</b> Старайтесь контролировать дыхание, сбавьте громкость и говорите ровным тоном.")
+        
+    tempo = features.get('tempo_bpm', 0)
+    if tempo > 145:
+        recs.append(f"⚡ <b>Слишком быстрый темп речи ({tempo:.0f} BPM):</b> Скорость превышает норму. Говорите медленнее, делайте паузы для лучшего понимания.")
+    elif tempo < 70 and tempo > 0:
+        recs.append(f"🐢 <b>Слишком медленный темп речи ({tempo:.0f} BPM):</b> Речь звучит пассивно. Постарайтесь говорить более динамично.")
+        
+    if not compliance["greeting"]:
+        recs.append("👋 <b>Нарушение регламента (Приветствие):</b> Менеджер не поприветствовал клиента. Используйте стандарт: <i>'Добрый день! Газпромбанк...'</i>.")
+    if not compliance["goodbye"]:
+        recs.append("🤝 <b>Нарушение регламента (Прощание):</b> В конце разговора не зафиксировано вежливого прощания.")
+    if not compliance["politeness"]:
+        recs.append("✨ <b>Рекомендация по вежливости:</b> Добавьте в диалог больше слов поддержки (<i>'спасибо', 'пожалуйста', 'рад помочь'</i>).")
+    if not compliance["no_stop_words"]:
+        stops_str = ", ".join([f"'{s}'" for s in compliance["found_stops"]])
+        recs.append(f"⚠️ <b>Обнаружены стоп-слова ({stops_str}):</b> Данные фразы вызывают сопротивление. Замените их на конструктивные формулировки.")
+        
+    if not recs:
+        recs.append("🌟 <b>Идеальный звонок!</b> Все требования регламента (QA) соблюдены, уровень стресса в норме, темп речи оптимальный. Так держать!")
+        
+    recs_html = "".join([f"<li style='margin-bottom: 0.5rem;'>{r}</li>" for r in recs])
     
     c_greeting_icon = "✓" if compliance["greeting"] else "✗"
     c_greeting_color = "#10b981" if compliance["greeting"] else "#ef4444"
@@ -881,8 +960,6 @@ def format_report_html(res, is_simulation=False):
     c_stops_icon = "✓" if compliance["no_stop_words"] else "✗"
     c_stops_color = "#10b981" if compliance["no_stop_words"] else "#ef4444"
     c_stops_desc = "Токсичные стоп-слова не обнаружены" if compliance["no_stop_words"] else f"Обнаружено: {', '.join(compliance['found_stops'])}"
-    
-    recs_html = "".join([f"<li style='margin-bottom: 0.5rem;'>{r}</li>" for r in recs])
     
     # Сборка HTML реплик диалога
     segments_html = []
@@ -934,7 +1011,7 @@ def format_report_html(res, is_simulation=False):
     </div>
     """
     
-    header_title = "📊 Результат Экспресс-Анализа (Симуляция)" if is_simulation else "📊 Результат Экспресс-Анализа"
+    header_title = "📊 Результат Анализа (Симуляция)" if is_simulation else "📊 Результат Мультимодального Анализа"
     header_subtitle = "Режим быстрой эмуляции сценариев" if is_simulation else "Звонок обработан распределенной нейросетью"
     
     report_html = f"""
@@ -954,7 +1031,7 @@ def format_report_html(res, is_simulation=False):
             </div>
         </div>
         
-        <div style="display: grid; grid-template-columns: 1.25fr 0.75fr; gap: 1.5rem; margin-bottom: 1.5rem; align-items: start;">
+        <div style="display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 1.5rem; margin-bottom: 1.5rem; align-items: start;">
             <div>
                 <span style="color: #9ca3af; font-size: 0.8rem; display: block; margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Диалог (ASR с разделением спикеров):</span>
                 {dialogue_view_html}
@@ -995,9 +1072,9 @@ def format_report_html(res, is_simulation=False):
                 </div>
             </div>
             
-            <div style="background: rgba(255,255,255,0.02); padding: 1.25rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); height: 100%; box-sizing: border-box;">
-                <span style="color: #9ca3af; font-size: 0.8rem; display: block; margin-bottom: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Соблюдение регламента (QA):</span>
-                <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+            <div style="background: rgba(255,255,255,0.02); padding: 1.25rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); height: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 0.75rem;">
+                <span style="color: #9ca3af; font-size: 0.8rem; display: block; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Соблюдение регламента (QA):</span>
+                <div style="display: flex; flex-direction: column; gap: 0.65rem;">
                     
                     <div style="display: flex; align-items: center; gap: 0.75rem;">
                         <span style="font-size: 1.2rem; font-weight: bold; color: {c_greeting_color}; width: 20px; text-align: center;">{c_greeting_icon}</span>
@@ -1030,14 +1107,16 @@ def format_report_html(res, is_simulation=False):
                             <span style="font-size: 0.75rem; color: #9ca3af; display: block; line-height: 1.2;">{c_stops_desc}</span>
                         </div>
                     </div>
-                    
                 </div>
+
+                <span style="color: #9ca3af; font-size: 0.8rem; display: block; margin-top: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Чек-лист эмоциональных пиков (QA):</span>
+                {peaks_html}
             </div>
         </div>
         
-        <div style="background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(37, 99, 235, 0.08) 100%); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; box-shadow: 0 4px 15px rgba(139, 92, 246, 0.15);">
+        <div style="background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(37, 99, 235, 0.08) 100%); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; box-shadow: 0 4px 15px rgba(139, 92, 246, 0.15); text-align: left;">
             <h4 style="margin: 0 0 0.75rem 0; color: #c084fc; font-size: 1rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem;">
-                💡 Интеллектуальные рекомендации (AI Coach):
+                💡 Интеллектуальные советы (AI Coach):
             </h4>
             <ul style="margin: 0; padding-left: 1.25rem; font-size: 0.9rem; line-height: 1.6; color: #d1d5db; display: flex; flex-direction: column; gap: 0.5rem;">
                 {recs_html}
@@ -1095,7 +1174,7 @@ def format_report_html(res, is_simulation=False):
 def run_simulation(example_type):
     # Симуляция разных сценариев
     if example_type == 1:
-        text = "Добрый день! Спасибо большое за ожидание. Подскажите, пожалуйста, номер вашего договора, я с радостью вам помогу всего хорошего."
+        text = "Добрый день! Газпромбанк, меня зовут Александр. Спасибо большое за ожидание. Подскажите, пожалуйста, номер вашего договора, я с радостью вам помогу всего хорошего."
         res = {
             "transcription": text,
             "text_stress": 0.05,
@@ -1170,8 +1249,16 @@ def run_simulation(example_type):
             ]
         }
         
+    chart_path = pipeline.plot_emotion_timeline(res["segments"], res["features"]["duration"])
+    res["chart_path"] = chart_path
+    
     report_html = format_report_html(res, is_simulation=True)
-    return report_html, generate_kpi_html(), generate_history_html()
+    if chart_path and os.path.exists(chart_path):
+        chart_update = gr.update(value=chart_path, visible=True)
+    else:
+        chart_update = gr.update(visible=False)
+        
+    return report_html, chart_update, generate_kpi_html(), generate_history_html()
 
 def predict(audio):
     if audio is None:
@@ -1179,16 +1266,158 @@ def predict(audio):
         <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 1rem; color: #f87171; text-align: center;">
             ⚠️ Пожалуйста, запишите или загрузите аудиофайл.
         </div>
-        """, generate_kpi_html(), generate_history_html()
+        """, gr.update(visible=False), generate_kpi_html(), generate_history_html()
         
     res = pipeline.run_analysis(audio)
     report_html = format_report_html(res, is_simulation=False)
-    return report_html, generate_kpi_html(), generate_history_html()
+    chart_path = res.get("chart_path")
+    if chart_path and os.path.exists(chart_path):
+        chart_update = gr.update(value=chart_path, visible=True)
+    else:
+        chart_update = gr.update(visible=False)
+        
+    return report_html, chart_update, generate_kpi_html(), generate_history_html()
+
+def toggle_mode(mode):
+    if mode == "Поштучный (Single)":
+        return gr.update(visible=True), gr.update(visible=True), gr.update(visible=False), gr.update(visible=False)
+    else:
+        return gr.update(visible=False), gr.update(visible=False), gr.update(visible=True), gr.update(visible=True)
+
+def predict_batch_ui(files):
+    if not files:
+        return """
+        <div style="border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px; padding: 3rem; text-align: center; color: #ef4444;">
+            ⚠️ Пожалуйста, выберите хотя бы один аудиофайл для пакетной обработки.
+        </div>
+        """, gr.update(visible=False), generate_kpi_html(), generate_history_html()
+        
+    file_paths = [f.name if hasattr(f, "name") else f for f in files]
+    batch_res = pipeline.run_analysis_batch(file_paths)
+    
+    rows = ""
+    for idx, res in enumerate(batch_res):
+        filepath = file_paths[idx]
+        filename = os.path.basename(filepath)
+        stress = res.get("final_stress", 0.0)
+        
+        if stress >= 0.7:
+            stress_style = "color: #ef4444; font-weight: bold;"
+            verdict = "Критический стресс 🚨"
+            advice = "Требуется перерыв / Смена"
+        elif stress >= 0.4:
+            stress_style = "color: #f59e0b; font-weight: bold;"
+            verdict = "Повышенное волнение ⚠️"
+            advice = "Контролировать темп"
+        else:
+            stress_style = "color: #10b981; font-weight: bold;"
+            verdict = "Стабильное состояние ✅"
+            advice = "Диалог проведен отлично"
+            
+        compliance = check_compliance(res.get("transcription", ""))
+        comp_score = 0
+        if compliance["greeting"]: comp_score += 1
+        if compliance["goodbye"]: comp_score += 1
+        if compliance["politeness"]: comp_score += 1
+        if compliance["no_stop_words"]: comp_score += 1
+        
+        comp_str = f"{comp_score}/4"
+        if comp_score == 4:
+            comp_style = "color: #10b981; font-weight: bold;"
+        elif comp_score >= 2:
+            comp_style = "color: #fbbf24; font-weight: bold;"
+        else:
+            comp_style = "color: #ef4444; font-weight: bold;"
+            
+        duration = res.get("features", {}).get("duration", 0.0)
+        
+        rows += f"""
+        <tr style="border-bottom: 1px solid rgba(255,255,255,0.04); transition: background 0.2s;">
+            <td style="padding: 0.85rem 1rem; color: #f3f4f6; font-size: 0.9rem; font-weight: 500;">{filename}</td>
+            <td style="padding: 0.85rem 1rem; color: #9ca3af; font-size: 0.9rem;">{duration:.1f} сек</td>
+            <td style="padding: 0.85rem 1rem; {comp_style} font-size: 0.9rem;">{comp_str}</td>
+            <td style="padding: 0.85rem 1rem; {stress_style} font-size: 0.9rem;">{stress * 100:.0f}%</td>
+            <td style="padding: 0.85rem 1rem; color: #e5e7eb; font-size: 0.85rem;">{verdict}</td>
+            <td style="padding: 0.85rem 1rem; color: #9ca3af; font-size: 0.85rem;"><i>{advice}</i></td>
+        </tr>
+        """
+        
+    table_html = f"""
+    <div style="background: rgba(10, 15, 26, 0.65); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; overflow: hidden; font-family: 'Outfit', sans-serif;">
+        <div style="background: linear-gradient(135deg, rgba(37, 99, 235, 0.08) 0%, rgba(124, 58, 237, 0.08) 100%); padding: 1rem 1.25rem; border-bottom: 1px solid rgba(255,255,255,0.08); text-align: left;">
+            <h3 style="margin: 0; font-size: 1.2rem; color: #fff; font-weight: 700;">📋 Результаты пакетной обработки файлов ({len(files)} шт.)</h3>
+            <span style="font-size: 0.8rem; color: #9ca3af;">Модели обработаны групповым инференсом (без перезагрузки VRAM)</span>
+        </div>
+        <table style="width: 100%; border-collapse: collapse; text-align: left;">
+            <thead>
+                <tr style="background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.08);">
+                    <th style="padding: 0.75rem 1rem; color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; font-weight: bold;">Файл</th>
+                    <th style="padding: 0.75rem 1rem; color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; font-weight: bold;">Длительность</th>
+                    <th style="padding: 0.75rem 1rem; color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; font-weight: bold;">Комплаенс</th>
+                    <th style="padding: 0.75rem 1rem; color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; font-weight: bold;">Стресс</th>
+                    <th style="padding: 0.75rem 1rem; color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; font-weight: bold;">Вердикт</th>
+                    <th style="padding: 0.75rem 1rem; color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; font-weight: bold;">Рекомендация</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows}
+            </tbody>
+        </table>
+    </div>
+    """
+    return table_html, gr.update(visible=False), generate_kpi_html(), generate_history_html()
+
+@app.post("/api/analyze_batch")
+async def api_analyze_batch(files: list[UploadFile] = File(...), operator: str = Form(None)):
+    """Выполняет пакетный анализ списка аудиофайлов."""
+    temp_paths = []
+    import tempfile
+    import shutil
+    import os
+    for file in files:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp:
+            shutil.copyfileobj(file.file, temp)
+            temp_paths.append(temp.name)
+            
+    try:
+        batch_res = pipeline.run_analysis_batch(temp_paths)
+        
+        # Добавляем комплаенс и суммаризацию для каждого
+        for res in batch_res:
+            res["compliance"] = check_compliance(res["transcription"])
+            res["summary"] = generate_summary(res["transcription"], res, res["compliance"])
+            
+            # Сохраняем в БД для каждого файла, если передан оператор
+            if operator:
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    comp = res["compliance"]
+                    comp_score = (int(comp["greeting"]) + int(comp["goodbye"]) + int(comp["politeness"]) + int(comp["no_stop_words"])) / 4.0
+                    cursor.execute(
+                        "INSERT INTO calls (operator_username, timestamp, duration, stress_score, compliance_score, summary, transcription) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (operator, time.strftime("%Y-%m-%d %H:%M:%S"), res["features"]["duration"], float(res["final_stress"]), comp_score, res["summary"], res["transcription"])
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception as db_ex:
+                    print(f"[DB Error] Ошибка сохранения в БД при пакете: {db_ex}")
+                    
+        return batch_res
+    except Exception as e:
+        print(f"[API Batch] Ошибка пакетного анализа: {e}")
+        return {"error": str(e)}
+    finally:
+        for path in temp_paths:
+            try:
+                os.unlink(path)
+            except Exception:
+                pass
 
 # Создаем интерфейс Gradio
 with gr.Blocks(title="GPB MER Distributed MVP") as demo:
-    # Инжектируем CSS напрямую через HTML для совместимости с Gradio 6
     gr.HTML(f"<style>{custom_css}</style>")
+    
     # Заголовок
     with gr.Row(elem_classes="header-container"):
         with gr.Column():
@@ -1208,13 +1437,33 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
             with gr.Row():
                 with gr.Column(scale=5):
                     gr.Markdown("### 📥 Входной аудиопоток")
+                    
+                    # Переключатель режимов
+                    mode_select = gr.Radio(
+                        choices=["Поштучный (Single)", "Пакетный (Batch)"], 
+                        value="Поштучный (Single)", 
+                        label="Режим обработки"
+                    )
+                    
+                    # Поштучный uploader
                     audio_in = gr.Audio(
                         sources=["microphone", "upload"], 
                         type="filepath", 
                         label="Запишите голос или загрузите аудиофайл (.wav / .mp3)",
-                        elem_classes="input-box"
+                        elem_classes="input-box",
+                        visible=True
                     )
-                    btn = gr.Button("🚀 Запустить распределенный анализ", variant="primary")
+                    btn = gr.Button("🚀 Запустить распределенный анализ", variant="primary", visible=True)
+                    
+                    # Пакетный uploader
+                    batch_in = gr.File(
+                        file_count="multiple",
+                        file_types=["audio"],
+                        label="Загрузите несколько аудиофайлов для пакетной обработки",
+                        elem_classes="input-box",
+                        visible=False
+                    )
+                    batch_btn = gr.Button("🚀 Запустить пакетный анализ", variant="primary", visible=False)
                     
                     gr.Markdown("### 🎭 Быстрый старт (Тестовые сценарии)")
                     with gr.Row():
@@ -1231,6 +1480,7 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
                         </div>
                         """
                     )
+                    chart_img = gr.Image(label="Эмоциональная динамика звонка во времени", visible=False, type="filepath")
             
             gr.Markdown("### 📈 Сводный дашборд KPI (Сессия)")
             kpi_dashboard = gr.HTML(value=generate_kpi_html())
@@ -1242,16 +1492,24 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
             gr.HTML(value=generate_apk_download_html())
             
             # Логика событий
-            btn.click(fn=predict, inputs=[audio_in], outputs=[output_html, kpi_dashboard, history_table])
+            btn.click(fn=predict, inputs=[audio_in], outputs=[output_html, chart_img, kpi_dashboard, history_table])
+            batch_btn.click(fn=predict_batch_ui, inputs=[batch_in], outputs=[output_html, chart_img, kpi_dashboard, history_table])
+            
+            # Переключение режима
+            mode_select.change(
+                fn=toggle_mode,
+                inputs=[mode_select],
+                outputs=[audio_in, btn, batch_in, batch_btn]
+            )
             
             # Функции-обертки для демо-кнопок
             def load_sim1(): return run_simulation(1)
             def load_sim2(): return run_simulation(2)
             def load_sim3(): return run_simulation(3)
             
-            sim_btn_1.click(fn=load_sim1, inputs=[], outputs=[output_html, kpi_dashboard, history_table])
-            sim_btn_2.click(fn=load_sim2, inputs=[], outputs=[output_html, kpi_dashboard, history_table])
-            sim_btn_3.click(fn=load_sim3, inputs=[], outputs=[output_html, kpi_dashboard, history_table])
+            sim_btn_1.click(fn=load_sim1, inputs=[], outputs=[output_html, chart_img, kpi_dashboard, history_table])
+            sim_btn_2.click(fn=load_sim2, inputs=[], outputs=[output_html, chart_img, kpi_dashboard, history_table])
+            sim_btn_3.click(fn=load_sim3, inputs=[], outputs=[output_html, chart_img, kpi_dashboard, history_table])
             
         # Вкладка 2: Настройка распределения
         with gr.Tab("⚙️ Распределение вычислений"):
@@ -1322,6 +1580,10 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
 app = gr.mount_gradio_app(app, demo, path="/")
 
 if __name__ == "__main__":
+    import sys
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    
     import threading
     import webbrowser
     import subprocess

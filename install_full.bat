@@ -16,15 +16,20 @@ call .venv_full\Scripts\activate.bat
 python -m pip install --upgrade pip
 pip uninstall -y gigaam
 
-echo Установка PyTorch с поддержкой GPU (CUDA 12.1) для RTX 3050...
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-echo Установка остальных зависимостей...
+echo Установка зависимостей из requirements.txt...
 pip install -r requirements.txt
 if %errorlevel% neq 0 (
-    echo [ERROR] Ошибка установки зависимостей.
+    echo [ERROR] Ошибка установки зависимостей из requirements.txt.
     pause
     exit /b %errorlevel%
 )
+
+echo 🔥 Принудительная установка PyTorch с поддержкой GPU (CUDA 12.1) поверх CPU-версий...
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121 --force-reinstall
+
+echo Проверка доступности GPU (CUDA)...
+python -c "import torch; print('CUDA Available:', torch.cuda.is_available()); print('Device Name:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
+
 echo [SUCCESS] Установка завершена успешно! Используйте run_full.bat для запуска.
 pause
+

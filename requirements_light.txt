@@ -8,3 +8,5 @@ numpy
 python-dotenv
 psutil
 imageio-ffmpeg
+matplotlib
+scipy

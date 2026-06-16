@@ -36,3 +36,16 @@ venv*/
 .venv_full/
 .venv_light/
 
+# Database
+*.db
+
+# Android-specific ignores
+android-app/.gradle/
+android-app/build/
+android-app/local.properties
+android-app/jdk17/
+android-app/.idea/
+android-app/*.iml
+
+
+

@@ -54,3 +54,40 @@ class TextEmotionAnalyzer:
             neutral_score /= total
             
         return {"stress": float(stress_score), "neutral": float(neutral_score)}
+
+    def analyze_batch(self, texts):
+        """Пакетный анализ списка текстов на эмоции."""
+        if not texts:
+            return []
+            
+        if config.MOCK_MODE:
+            return [self.analyze(t) for t in texts]
+            
+        # Реальный инференс
+        try:
+            # Заменяем пустые строки на пробелы, чтобы пайплайн не падал
+            valid_texts = [t if (t and t.strip()) else " " for t in texts]
+            outputs = self.pipe(valid_texts)
+            
+            results = []
+            for output in outputs:
+                if not isinstance(output, list):
+                     output = [output]
+                scores = {item['label'].upper(): item['score'] for item in output}
+                
+                negative_keys = ['NEGATIVE', 'NEG', 'LABEL_2', 'ANGER', 'FEAR', 'SADNESS', 'DISGUST']
+                neutral_keys = ['NEUTRAL', 'NEU', 'LABEL_0', 'POSITIVE', 'POS', 'LABEL_1', 'JOY', 'SURPRISE']
+                
+                stress_score = sum(scores.get(k, 0.0) for k in negative_keys)
+                neutral_score = sum(scores.get(k, 0.0) for k in neutral_keys)
+                
+                total = stress_score + neutral_score
+                if total > 0:
+                    stress_score /= total
+                    neutral_score /= total
+                results.append({"stress": round(float(stress_score), 2), "neutral": round(float(neutral_score), 2)})
+            return results
+        except Exception as e:
+            print(f"[Text AI] Ошибка пакетного анализа текста: {e}. Переключаемся на последовательный.")
+            return [self.analyze(t) for t in texts]
+

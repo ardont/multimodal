@@ -3,28 +3,76 @@ import numpy as np
 import librosa
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
+import config
 
-def diarize_audio(audio_path, num_speakers=2):
-    """
-    Выполняет диаризацию аудиофайла: разделение аудио на интервалы реплик и
-    кластеризацию этих интервалов по спикерам с помощью MFCC и KMeans.
-    """
+def diarize_audio_pyannote(audio_path, num_speakers=2):
+    """Диаризация с помощью pyannote/speaker-diarization-3.1."""
+    token = getattr(config, "HF_TOKEN", "")
+    if not token:
+        raise ValueError("HF_TOKEN не настроен в config")
+        
+    from pyannote.audio import Pipeline
+    import torch
+    
+    pipeline = Pipeline.from_pretrained(
+        "pyannote/speaker-diarization-3.1",
+        use_auth_token=token
+    )
+    if pipeline is None:
+        raise ValueError("Не удалось загрузить пайплайн PyAnnote (проверьте соглашение на HF)")
+        
+    # Перенос на GPU при наличии
+    device = "cuda" if "cuda" in getattr(config, "DEVICE_STR", "") else "cpu"
+    if device == "cuda" and torch.cuda.is_available():
+        pipeline.to(torch.device("cuda"))
+        
+    diarization = pipeline(audio_path, num_speakers=num_speakers)
+    
+    # Загружаем аудио для нарезки волновой формы реплик
+    y, sr = librosa.load(audio_path, sr=16000)
+    duration = len(y) / sr
+    
+    segments = []
+    for turn, _, speaker in diarization.itertracks(yield_label=True):
+        start_sec = max(0.0, turn.start)
+        end_sec = min(duration, turn.end)
+        start_frame = int(start_sec * sr)
+        end_frame = int(end_sec * sr)
+        
+        # Переводим в стандартные метки спикеров
+        speaker_label = "Спикер A" if speaker == "SPEAKER_00" else "Спикер B"
+        
+        segments.append({
+            "start": round(start_sec, 2),
+            "end": round(end_sec, 2),
+            "speaker": speaker_label,
+            "y": y[start_frame:end_frame]
+        })
+        
+    if not segments:
+        segments.append({
+            "start": 0.0,
+            "end": round(duration, 2),
+            "speaker": "Спикер A",
+            "y": y
+        })
+        
+    return segments
+
+def diarize_audio_kmeans(audio_path, num_speakers=2):
+    """Локальная диаризация на основе KMeans (резервный метод)."""
     try:
-        # 1. Загружаем аудио (resample до 16кГц для консистентности)
         y, sr = librosa.load(audio_path, sr=16000)
         duration = librosa.get_duration(y=y, sr=sr)
         
         if duration < 1.0:
             return [{"start": 0.0, "end": round(duration, 2), "speaker": "Спикер A", "y": y}]
             
-        # 2. Детектируем интервалы голоса (Voice Activity Detection)
-        # top_db=25 — порог шума. frame_length и hop_length настроены для сглаживания
         intervals = librosa.effects.split(y, top_db=25, frame_length=2048, hop_length=512)
         
         if len(intervals) == 0:
             return [{"start": 0.0, "end": round(duration, 2), "speaker": "Спикер A", "y": y}]
             
-        # Преобразуем интервалы во временные рамки в секундах
         segments = []
         for start_frame, end_frame in intervals:
             start_sec = start_frame / sr
@@ -35,7 +83,6 @@ def diarize_audio(audio_path, num_speakers=2):
                 "y": y[start_frame:end_frame]
             })
             
-        # 3. Объединяем реплики, между которыми пауза менее 0.8 секунд
         merged_segments = []
         if segments:
             curr = segments[0]
@@ -57,17 +104,14 @@ def diarize_audio(audio_path, num_speakers=2):
                 seg["speaker"] = "Спикер A"
             return merged_segments
             
-        # 4. Извлекаем спектральные фичи (MFCC) для каждого сегмента
         features = []
         valid_segments = []
         for seg in merged_segments:
             seg_y = seg["y"]
-            if len(seg_y) < 1600:  # Пропускаем сегменты короче 0.1 секунды
+            if len(seg_y) < 1600:
                 continue
                 
-            # Извлекаем 13 коэффициентов MFCC
             mfcc = librosa.feature.mfcc(y=seg_y, sr=sr, n_mfcc=13)
-            # Усредняем характеристики по времени, чтобы получить один вектор на реплику
             mfcc_mean = np.mean(mfcc, axis=1)
             mfcc_std = np.std(mfcc, axis=1)
             feat_vector = np.concatenate([mfcc_mean, mfcc_std])
@@ -80,7 +124,6 @@ def diarize_audio(audio_path, num_speakers=2):
                 seg["speaker"] = "Спикер A"
             return merged_segments
             
-        # 5. Кластеризация KMeans
         features = np.array(features)
         scaler = StandardScaler()
         features_scaled = scaler.fit_transform(features)
@@ -88,22 +131,34 @@ def diarize_audio(audio_path, num_speakers=2):
         kmeans = KMeans(n_clusters=num_speakers, random_state=42, n_init=10)
         labels = kmeans.fit_predict(features_scaled)
         
-        # Размечаем сегменты
         for seg, label in zip(valid_segments, labels):
             seg["speaker"] = "Спикер A" if label == 0 else "Спикер B"
             
-        # Для пропущенных слишком коротких сегментов ставим Спикер A по умолчанию
         for seg in merged_segments:
             if "speaker" not in seg:
                 seg["speaker"] = "Спикер A"
                 
         return merged_segments
     except Exception as e:
-        print(f"[Diarizer Error] Ошибка диаризации: {e}")
-        # При любой ошибке возвращаем аудио как один сегмент
+        print(f"[Diarizer Error] Ошибка KMeans-диаризации: {e}")
         try:
             y, sr = librosa.load(audio_path, sr=16000)
             duration = librosa.get_duration(y=y, sr=sr)
             return [{"start": 0.0, "end": round(duration, 2), "speaker": "Спикер A", "y": y}]
         except Exception:
             return [{"start": 0.0, "end": 5.0, "speaker": "Спикер A", "y": np.zeros(16000 * 5)}]
+
+def diarize_audio(audio_path, num_speakers=2):
+    """
+    Разделяет аудио по спикерам.
+    Пытается применить pyannote/speaker-diarization-3.1, при неудаче
+    делает мягкий откат на локальный алгоритм KMeans.
+    """
+    if not config.MOCK_MODE and getattr(config, "HF_TOKEN", ""):
+        try:
+            return diarize_audio_pyannote(audio_path, num_speakers)
+        except Exception as e:
+            print(f"[Diarizer] PyAnnote недоступен ({e}). Откат на локальный KMeans.")
+            
+    return diarize_audio_kmeans(audio_path, num_speakers)
+
