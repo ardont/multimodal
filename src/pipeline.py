@@ -41,13 +41,17 @@ class MultimodalPipeline:
         except Exception:
             return None
 
-    def _get_fused_stress(self, text, text_stress, audio_stress, silence_ratio, duration):
+    def _get_fused_stress(self, text, text_stress, audio_stress, silence_ratio, duration, enable_audio_emo=True):
         """
         Динамическое взвешивание модальностей на основе характеристик реплики:
+        - Если акустический стресс отключен (enable_audio_emo=False), доверяем тексту на 100%.
         - Если реплика короткая (<= 3 слов), доверяем аудио интонации (вес аудио = 75%).
         - Если реплика длинная (> 3 слов), доверяем текстовому смыслу (вес текста = 65%).
         - Если в аудио много тишины/пауз (> 40%), снижаем вес аудио до 15%.
         """
+        if not enable_audio_emo:
+            return round(float(text_stress), 2)
+            
         words_count = len(text.split())
         
         # Базовые веса по умолчанию
@@ -223,7 +227,7 @@ class MultimodalPipeline:
             print(f"[Chart Error] Не удалось построить график: {e}")
             return None
 
-    def run_analysis(self, audio_path):
+    def run_analysis(self, audio_path, enable_asr=True, enable_audio_emo=True, enable_coach=True):
         if not audio_path:
             return {
                 "transcription": "",
@@ -231,16 +235,28 @@ class MultimodalPipeline:
                 "audio_stress": 0.0,
                 "final_stress": 0.0,
                 "features": {},
-                "segments": []
+                "segments": [],
+                "chart_path": None,
+                "options": {
+                    "enable_asr": enable_asr,
+                    "enable_audio_emo": enable_audio_emo,
+                    "enable_coach": enable_coach
+                }
             }
             
         # 1. Проверка кеша по хэшу файла
         file_hash = self._get_file_hash(audio_path)
         if file_hash and file_hash in self._cache:
-            print(f"[Pipeline] [CACHE HIT] Возвращаем результат из кеша для {file_hash}")
-            res = self._cache.pop(file_hash)
-            self._cache[file_hash] = res
-            return res
+            # Проверяем, совпадают ли опции запуска в кэшированном ответе
+            cached_res = self._cache[file_hash]
+            cached_opts = cached_res.get("options", {})
+            if (cached_opts.get("enable_asr", True) == enable_asr and 
+                cached_opts.get("enable_audio_emo", True) == enable_audio_emo and 
+                cached_opts.get("enable_coach", True) == enable_coach):
+                print(f"[Pipeline] [CACHE HIT] Возвращаем результат из кеша для {file_hash}")
+                res = self._cache.pop(file_hash)
+                self._cache[file_hash] = res
+                return res
 
         # 2. Шумоподавление (вырезаем монотонный фоновый гул)
         import tempfile
@@ -255,6 +271,26 @@ class MultimodalPipeline:
             
             if config.MOCK_MODE:
                 # В Mock-режиме эмулируем двух спикеров
+                if not enable_asr:
+                    avg_audio_stress = 0.07 if enable_audio_emo else 0.0
+                    res_dict = {
+                        "transcription": "",
+                        "text_stress": 0.0,
+                        "audio_stress": avg_audio_stress,
+                        "final_stress": avg_audio_stress,
+                        "features": total_features,
+                        "segments": [],
+                        "chart_path": None,
+                        "options": {
+                            "enable_asr": enable_asr,
+                            "enable_audio_emo": enable_audio_emo,
+                            "enable_coach": enable_coach
+                        }
+                    }
+                    if file_hash:
+                        self._cache[file_hash] = res_dict
+                    return res_dict
+
                 segments = diarize_audio(clean_wav_path)
                 mock_dialogue = [
                     ("Оператор (Спикер А)", "Добрый день! Газпромбанк, меня зовут Александр. Чем я могу вам помочь?", 0.10, 0.05),
@@ -270,10 +306,16 @@ class MultimodalPipeline:
                     dialogue_idx = i % len(mock_dialogue)
                     speaker_role, text, audio_stress, text_stress = mock_dialogue[dialogue_idx]
                     
+                    if not enable_audio_emo:
+                        audio_stress = 0.0
+                    
                     diarizer_speaker = seg.get("speaker", "Спикер A")
                     final_speaker = "Оператор (Спикер А)" if diarizer_speaker == "Спикер A" else "Клиент (Спикер Б)"
                     
-                    final_stress = self._get_fused_stress(text, text_stress, audio_stress, 0.1, seg["end"]-seg["start"])
+                    final_stress = self._get_fused_stress(
+                        text, text_stress, audio_stress, 0.1, seg["end"]-seg["start"],
+                        enable_audio_emo=enable_audio_emo
+                    )
                     
                     analyzed_segments.append({
                         "start": seg["start"],
@@ -299,14 +341,52 @@ class MultimodalPipeline:
                     "final_stress": round(float(avg_final_stress), 2),
                     "features": total_features,
                     "segments": analyzed_segments,
-                    "chart_path": chart_path
+                    "chart_path": chart_path,
+                    "options": {
+                        "enable_asr": enable_asr,
+                        "enable_audio_emo": enable_audio_emo,
+                        "enable_coach": enable_coach
+                    }
                 }
                 
                 if file_hash:
                     self._cache[file_hash] = res_dict
                 return res_dict
 
-            # Реальный многопоточный инференс
+            # Реальный инференс
+            if not enable_asr:
+                avg_audio_stress = 0.0
+                if enable_audio_emo:
+                    try:
+                        audio_route = config.ROUTING.get("audio", "local")
+                        if audio_route == "local":
+                            score = self.audio_ai.analyze(clean_wav_path)
+                        else:
+                            score = network.remote_audio_analysis(audio_route, clean_wav_path)
+                            if score.get("error") and config.FAILOVER_TO_LOCAL:
+                                score = self.audio_ai.analyze(clean_wav_path)
+                        avg_audio_stress = score.get("stress", 0.0)
+                    except Exception as ex:
+                        print(f"[Audio Emo Error] {ex}")
+
+                res_dict = {
+                    "transcription": "",
+                    "text_stress": 0.0,
+                    "audio_stress": round(float(avg_audio_stress), 2),
+                    "final_stress": round(float(avg_audio_stress), 2),
+                    "features": total_features,
+                    "segments": [],
+                    "chart_path": None,
+                    "options": {
+                        "enable_asr": enable_asr,
+                        "enable_audio_emo": enable_audio_emo,
+                        "enable_coach": enable_coach
+                    }
+                }
+                if file_hash:
+                    self._cache[file_hash] = res_dict
+                return res_dict
+
             print("[Pipeline] Запуск диаризации аудио...")
             segments = diarize_audio(clean_wav_path)
             
@@ -314,13 +394,11 @@ class MultimodalPipeline:
             text_route = config.ROUTING.get("text", "local")
             audio_route = config.ROUTING.get("audio", "local")
             
-            # Запускаем Thread A (ASR + BERT) и Thread B (Audio Emo) параллельно с шахматной задержкой
             def thread_a_task():
                 try:
                     if config.HAS_TORCH and torch.cuda.is_available():
                         print(f"[VRAM] Поток А (ASR) старт: {torch.cuda.memory_allocated() / (1024*1024):.1f} MB выделено")
                         
-                    # Распознавание всего файла целиком
                     if asr_route == "local":
                         asr_res = self.asr.transcribe_with_timestamps(clean_wav_path)
                     else:
@@ -329,10 +407,8 @@ class MultimodalPipeline:
                         if "[Ошибка" in text_raw and config.FAILOVER_TO_LOCAL:
                             asr_res = self.asr.transcribe_with_timestamps(clean_wav_path)
                             
-                    # Выравнивание
                     aligned_segs = self._align_words_to_segments(asr_res.get("words", []), segments, clean_wav_path)
                     
-                    # BERT по репликам спикеров
                     texts_to_score = [s["text"] for s in aligned_segs]
                     if text_route == "local":
                         text_scores = self.text_ai.analyze_batch(texts_to_score)
@@ -349,7 +425,6 @@ class MultimodalPipeline:
                     
             def thread_b_task():
                 try:
-                    # Шахматная задержка для предупреждения пика VRAM CUDA
                     time.sleep(1.5)
                     if config.HAS_TORCH and torch.cuda.is_available():
                         print(f"[VRAM] Поток Б (Audio Emo) старт: {torch.cuda.memory_allocated() / (1024*1024):.1f} MB выделено")
@@ -384,19 +459,19 @@ class MultimodalPipeline:
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                 future_a = executor.submit(thread_a_task)
-                future_b = executor.submit(thread_b_task)
+                if enable_audio_emo:
+                    future_b = executor.submit(thread_b_task)
+                    aligned_segs = future_a.result()
+                    audio_scores = future_b.result()
+                else:
+                    aligned_segs = future_a.result()
+                    audio_scores = [{"stress": 0.0, "features": {}} for _ in aligned_segs]
                 
-                aligned_segs = future_a.result()
-                audio_scores = future_b.result()
-                
-            # Слияние результатов
             full_texts = []
             analyzed_segments = []
             
             for i, seg in enumerate(aligned_segs):
-                # Находим аудио-оценку по индексу сегмента
                 a_score = audio_scores[i] if i < len(audio_scores) else {"stress": 0.0, "features": {}}
-                
                 seg_duration = seg["end"] - seg["start"]
                 silence_ratio = a_score.get("features", {}).get("silence_ratio", 0.0)
                 
@@ -404,7 +479,8 @@ class MultimodalPipeline:
                 audio_stress = a_score.get("stress", 0.0)
                 
                 final_stress = self._get_fused_stress(
-                    seg["text"], text_stress, audio_stress, silence_ratio, seg_duration
+                    seg["text"], text_stress, audio_stress, silence_ratio, seg_duration,
+                    enable_audio_emo=enable_audio_emo
                 )
                 
                 seg["audio_stress"] = round(audio_stress, 2)
@@ -426,7 +502,12 @@ class MultimodalPipeline:
                 "final_stress": round(float(avg_final_stress), 2),
                 "features": total_features,
                 "segments": analyzed_segments,
-                "chart_path": chart_path
+                "chart_path": chart_path,
+                "options": {
+                    "enable_asr": enable_asr,
+                    "enable_audio_emo": enable_audio_emo,
+                    "enable_coach": enable_coach
+                }
             }
             
             if file_hash:
@@ -442,7 +523,7 @@ class MultimodalPipeline:
             except Exception:
                 pass
 
-    def run_analysis_batch(self, audio_paths):
+    def run_analysis_batch(self, audio_paths, enable_asr=True, enable_audio_emo=True, enable_coach=True):
         """
         Пакетная обработка списка файлов. Группирует вызовы моделей,
         использует кеш, слияние без физической нарезки и шахматные потоки.
@@ -458,18 +539,75 @@ class MultimodalPipeline:
         for idx, path in enumerate(audio_paths):
             file_hash = self._get_file_hash(path)
             if file_hash and file_hash in self._cache:
-                print(f"[Pipeline Batch] [CACHE HIT] Загружаем из кеша {path}")
-                res = self._cache.pop(file_hash)
-                self._cache[file_hash] = res
-                results[idx] = res
-            else:
-                jobs_indices.append(idx)
-                jobs_paths.append(path)
+                cached_res = self._cache[file_hash]
+                cached_opts = cached_res.get("options", {})
+                if (cached_opts.get("enable_asr", True) == enable_asr and 
+                    cached_opts.get("enable_audio_emo", True) == enable_audio_emo and 
+                    cached_opts.get("enable_coach", True) == enable_coach):
+                    print(f"[Pipeline Batch] [CACHE HIT] Загружаем из кеша {path}")
+                    res = self._cache.pop(file_hash)
+                    self._cache[file_hash] = res
+                    results[idx] = res
+                    continue
+            
+            jobs_indices.append(idx)
+            jobs_paths.append(path)
                 
         if not jobs_paths:
             return results
             
-        # 2. Запускаем анализ для некэшированных файлов
+        # 2. Если ASR отключен, делаем пакетную обработку только по акустике
+        if not enable_asr:
+            clean_paths = []
+            files_features = []
+            for path in jobs_paths:
+                with tempfile.NamedTemporaryFile(delete=False, suffix="_clean.wav") as temp_clean:
+                    clean_path = temp_clean.name
+                self.audio_ai.reduce_noise(path, clean_path)
+                clean_paths.append(clean_path)
+                feats = self.audio_ai.extract_acoustic_features(clean_path)
+                files_features.append(feats)
+                
+            try:
+                avg_audio_stresses = [0.0] * len(jobs_paths)
+                if enable_audio_emo:
+                    if config.MOCK_MODE:
+                        avg_audio_stresses = [0.07] * len(jobs_paths)
+                    else:
+                        flat_audio_res = self.audio_ai.analyze_batch(clean_paths)
+                        avg_audio_stresses = [r.get("stress", 0.0) for r in flat_audio_res]
+                        
+                for k, job_idx in enumerate(jobs_indices):
+                    original_path = jobs_paths[k]
+                    res_dict = {
+                        "transcription": "",
+                        "text_stress": 0.0,
+                        "audio_stress": round(float(avg_audio_stresses[k]), 2),
+                        "final_stress": round(float(avg_audio_stresses[k]), 2),
+                        "features": files_features[k],
+                        "segments": [],
+                        "chart_path": None,
+                        "options": {
+                            "enable_asr": enable_asr,
+                            "enable_audio_emo": enable_audio_emo,
+                            "enable_coach": enable_coach
+                        }
+                    }
+                    file_hash = self._get_file_hash(original_path)
+                    if file_hash:
+                        if len(self._cache) >= self._max_cache_size:
+                            self._cache.pop(next(iter(self._cache)))
+                        self._cache[file_hash] = res_dict
+                    results[job_idx] = res_dict
+                return results
+            finally:
+                for p in clean_paths:
+                    try:
+                        os.unlink(p)
+                    except:
+                        pass
+            
+        # 3. Полный анализ для некэшированных файлов (ASR=True)
         clean_paths = []
         files_segments = []
         files_features = []
@@ -492,17 +630,14 @@ class MultimodalPipeline:
                 if config.HAS_TORCH and torch.cuda.is_available():
                     print(f"[VRAM] Поток А (Batch ASR) старт: {torch.cuda.memory_allocated() / (1024*1024):.1f} MB выделено")
                     
-                # ASR на всех цельных очищенных файлах
                 asr_results = []
                 for clean_path in clean_paths:
                     asr_results.append(self.asr.transcribe_with_timestamps(clean_path))
                     
-                # Выравнивание слов
                 aligned_files_segs = []
                 for asr_res, segs, clean_path in zip(asr_results, files_segments, clean_paths):
                     aligned_files_segs.append(self._align_words_to_segments(asr_res["words"], segs, clean_path))
                     
-                # Собираем реплики всех файлов для пакетного BERT
                 all_segs_flat = []
                 all_texts_flat = []
                 for f_idx, segs in enumerate(aligned_files_segs):
@@ -510,10 +645,8 @@ class MultimodalPipeline:
                         all_segs_flat.append((f_idx, s_idx))
                         all_texts_flat.append(seg["text"])
                         
-                # Batch BERT
                 flat_bert_res = self.text_ai.analyze_batch(all_texts_flat)
                 
-                # Распределяем обратно
                 for (f_idx, s_idx), res in zip(all_segs_flat, flat_bert_res):
                     aligned_files_segs[f_idx][s_idx]["text_stress"] = res.get("stress", 0.0)
                     
@@ -542,17 +675,14 @@ class MultimodalPipeline:
                         all_wavs_flat.append(temp_seg_path)
                         temp_segment_files.append(temp_seg_path)
                         
-                # Batch Emo
                 flat_audio_res = self.audio_ai.analyze_batch(all_wavs_flat)
                 
-                # Очистка
                 for path in temp_segment_files:
                     try:
                         os.unlink(path)
                     except:
                         pass
                         
-                # Распределяем оценки
                 f_audio_res = [[{"stress": 0.0, "features": {}} for _ in segs] for segs in files_segments]
                 for (f_idx, s_idx), res in zip(all_segs_flat, flat_audio_res):
                     f_audio_res[f_idx][s_idx] = {
@@ -566,19 +696,20 @@ class MultimodalPipeline:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             future_a = executor.submit(batch_thread_a)
-            future_b = executor.submit(batch_thread_b)
+            if enable_audio_emo:
+                future_b = executor.submit(batch_thread_b)
+                aligned_files_segs = future_a.result()
+                files_audio_res = future_b.result()
+            else:
+                aligned_files_segs = future_a.result()
+                files_audio_res = [[{"stress": 0.0, "features": {}} for _ in segs] for segs in files_segments]
             
-            aligned_files_segs = future_a.result()
-            files_audio_res = future_b.result()
-            
-        # Удаляем временные файлы
         for path in clean_paths:
             try:
                 os.unlink(path)
             except:
                 pass
                 
-        # 3. Собираем результаты, строим графики и сохраняем в кеш
         for k, job_idx in enumerate(jobs_indices):
             original_path = jobs_paths[k]
             aligned_segs = aligned_files_segs[k]
@@ -596,7 +727,8 @@ class MultimodalPipeline:
                 
                 seg["final_stress"] = self._get_fused_stress(
                     seg["text"], seg["text_stress"], seg["audio_stress"],
-                    silence_ratio, seg_duration
+                    silence_ratio, seg_duration,
+                    enable_audio_emo=enable_audio_emo
                 )
                 full_texts.append(f"[{seg['speaker']}]: {seg['text']}")
                 
@@ -613,7 +745,12 @@ class MultimodalPipeline:
                 "final_stress": round(float(avg_final_stress), 2),
                 "features": total_features,
                 "segments": aligned_segs,
-                "chart_path": chart_path
+                "chart_path": chart_path,
+                "options": {
+                    "enable_asr": enable_asr,
+                    "enable_audio_emo": enable_audio_emo,
+                    "enable_coach": enable_coach
+                }
             }
             
             file_hash = self._get_file_hash(original_path)

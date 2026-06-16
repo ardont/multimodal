@@ -839,7 +839,20 @@ def generate_history_html():
     """
     return table_html
 
-def format_report_html(res, is_simulation=False):
+GLOBAL_MD5_CACHE = {}
+
+def get_file_md5(file_path):
+    """Быстрое вычисление MD5-хэша для синхронизации с кешем."""
+    hasher = hashlib.md5()
+    try:
+        with open(file_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+    except Exception:
+        return None
+
+def format_report_html(res, is_simulation=False, speaker_filter="Все участники", add_to_history=False, options=None):
     stress = res['final_stress']
     if stress >= 0.7:
         stress_class = "stress-high"
@@ -861,155 +874,240 @@ def format_report_html(res, is_simulation=False):
         timeline_main_color = "#10b981"
         
     features = res['features']
-    compliance = check_compliance(res['transcription'])
+    
+    if options is None:
+        options = res.get("options", {})
+    enable_asr = options.get("enable_asr", True)
+    enable_audio_emo = options.get("enable_audio_emo", True)
+    enable_coach = options.get("enable_coach", True)
     
     # 1. Выделение ТОП-3 пиков эмоционального напряжения (QA Checklist)
     all_segs = res.get("segments", [])
-    sorted_segs = sorted(all_segs, key=lambda s: s.get("final_stress", 0.0), reverse=True)
-    peaks = [s for s in sorted_segs if s.get("final_stress", 0.0) >= 0.35][:3]
     
-    peaks_html_list = []
-    for p in peaks:
-        p_stress = p.get("final_stress", 0.0)
-        p_time_min = int(p["start"] // 60)
-        p_time_sec = int(p["start"] % 60)
-        p_time_str = f"{p_time_min}:{p_time_sec:02d}"
-        
-        p_icon = "🔴" if p_stress >= 0.7 else "🟡"
-        p_spk = p.get("speaker", "Спикер")
-        p_text = p.get("text", "")
-        
-        # Интеллектуальный совет к реплике
-        if "клиент" in p_spk.lower() or "спикер б" in p_spk.lower():
-            if p_stress >= 0.7:
-                p_tip = "Клиент проявляет агрессию. Оператору следует извиниться, не перебивать и предложить альтернативу."
-            else:
-                p_tip = "Клиент раздражен. Проявите эмпатию и снизьте темп разговора."
-        else:
-            if p_stress >= 0.7:
-                p_tip = "Критический стресс оператора. Сделайте паузу после звонка и обратитесь к супервизору."
-            else:
-                p_tip = "Менеджер взволнован. Сделайте глубокий вдох и говорите спокойнее."
-                
-        peaks_html_list.append(f"""
-        <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 0.65rem 0.85rem; display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.5rem; text-align: left;">
-            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; font-weight: bold;">
-                <span style="color: #60a5fa;">{p_icon} Реплика на {p_time_str} ({p_spk})</span>
-                <span style="color: {'#ef4444' if p_stress >= 0.7 else '#f59e0b'};">Стресс: {p_stress*100:.0f}%</span>
-            </div>
-            <span style="font-size: 0.85rem; color: #e5e7eb; line-height: 1.4;">"{p_text}"</span>
-            <span style="font-size: 0.75rem; color: #a78bfa; border-top: 1px dashed rgba(255,255,255,0.05); padding-top: 0.25rem; font-style: italic;"><b>Совет:</b> {p_tip}</span>
-        </div>
-        """)
-        
-    if not peaks_html_list:
+    if not enable_asr:
         peaks_html = """
-        <div style="text-align: center; color: #34d399; font-size: 0.8rem; padding: 0.85rem; background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.1); border-radius: 8px;">
-            ✓ Критических пиков стресса не зафиксировано. Диалог проведен спокойно.
+        <div style="text-align: center; color: #9ca3af; font-size: 0.8rem; padding: 0.85rem; background: rgba(255, 255, 255, 0.02); border: 1px dashed rgba(255, 255, 255, 0.1); border-radius: 8px;">
+            Анализ пиков стресса недоступен, так как отключено распознавание речи (ASR).
         </div>
         """
     else:
-        peaks_html = f"""
-        <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-            {"".join(peaks_html_list)}
-        </div>
-        """
+        sorted_segs = sorted(all_segs, key=lambda s: s.get("final_stress", 0.0), reverse=True)
+        peaks = [s for s in sorted_segs if s.get("final_stress", 0.0) >= 0.35][:3]
+        
+        peaks_html_list = []
+        for p in peaks:
+            p_stress = p.get("final_stress", 0.0)
+            p_time_min = int(p["start"] // 60)
+            p_time_sec = int(p["start"] % 60)
+            p_time_str = f"{p_time_min}:{p_time_sec:02d}"
+            
+            p_icon = "🔴" if p_stress >= 0.7 else "🟡"
+            p_spk = p.get("speaker", "Спикер")
+            p_text = p.get("text", "")
+            
+            # Интеллектуальный совет к реплике
+            if "клиент" in p_spk.lower() or "спикер б" in p_spk.lower():
+                if p_stress >= 0.7:
+                    p_tip = "Клиент проявляет агрессию. Оператору следует извиниться, не перебивать и предложить альтернативу."
+                else:
+                    p_tip = "Клиент раздражен. Проявите эмпатию и снизьте темп разговора."
+            else:
+                if p_stress >= 0.7:
+                    p_tip = "Критический стресс оператора. Сделайте паузу после звонка и обратитесь к супервизору."
+                else:
+                    p_tip = "Менеджер взволнован. Сделайте глубокий вдох и говорите спокойнее."
+                    
+            peaks_html_list.append(f"""
+            <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 0.65rem 0.85rem; display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.5rem; text-align: left;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.75rem; font-weight: bold;">
+                    <span style="color: #60a5fa;">{p_icon} Реплика на {p_time_str} ({p_spk})</span>
+                    <span style="color: {'#ef4444' if p_stress >= 0.7 else '#f59e0b'};">Стресс: {p_stress*100:.0f}%</span>
+                </div>
+                <span style="font-size: 0.85rem; color: #e5e7eb; line-height: 1.4;">"{p_text}"</span>
+                <span style="font-size: 0.75rem; color: #a78bfa; border-top: 1px dashed rgba(255,255,255,0.05); padding-top: 0.25rem; font-style: italic;"><b>Совет:</b> {p_tip}</span>
+            </div>
+            """)
+            
+        if not peaks_html_list:
+            peaks_html = """
+            <div style="text-align: center; color: #34d399; font-size: 0.8rem; padding: 0.85rem; background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.1); border-radius: 8px;">
+                ✓ Критических пиков стресса не зафиксировано. Диалог проведен спокойно.
+            </div>
+            """
+        else:
+            peaks_html = f"""
+            <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                {"".join(peaks_html_list)}
+            </div>
+            """
 
     # 2. Rule-based генерация советов AI Coach
     recs = []
-    if stress >= 0.7:
-        recs.append("🚨 <b>Критический стресс:</b> У оператора/клиента зафиксирован пик напряжения. Менеджеру рекомендуется сделать паузу и выпить воды.")
-    elif stress >= 0.4:
-        recs.append("📈 <b>Повышенное волнение:</b> Старайтесь контролировать дыхание, сбавьте громкость и говорите ровным тоном.")
+    if not enable_asr:
+        recs_html = """
+        <li style="margin-bottom: 0.5rem; list-style-type: none; color: #ef4444;">
+            ⚠️ <b>Анализ регламента недоступен</b>, так как отключено распознавание речи (ASR).
+        </li>
+        """
+        c_greeting_icon = "✗"
+        c_greeting_color = "#ef4444"
+        c_greeting_desc = "ASR отключен"
+        timeline_greeting_color = "#ef4444"
         
-    tempo = features.get('tempo_bpm', 0)
-    if tempo > 145:
-        recs.append(f"⚡ <b>Слишком быстрый темп речи ({tempo:.0f} BPM):</b> Скорость превышает норму. Говорите медленнее, делайте паузы для лучшего понимания.")
-    elif tempo < 70 and tempo > 0:
-        recs.append(f"🐢 <b>Слишком медленный темп речи ({tempo:.0f} BPM):</b> Речь звучит пассивно. Постарайтесь говорить более динамично.")
+        c_goodbye_icon = "✗"
+        c_goodbye_color = "#ef4444"
+        c_goodbye_desc = "ASR отключен"
+        timeline_goodbye_color = "#ef4444"
         
-    if not compliance["greeting"]:
-        recs.append("👋 <b>Нарушение регламента (Приветствие):</b> Менеджер не поприветствовал клиента. Используйте стандарт: <i>'Добрый день! Газпромбанк...'</i>.")
-    if not compliance["goodbye"]:
-        recs.append("🤝 <b>Нарушение регламента (Прощание):</b> В конце разговора не зафиксировано вежливого прощания.")
-    if not compliance["politeness"]:
-        recs.append("✨ <b>Рекомендация по вежливости:</b> Добавьте в диалог больше слов поддержки (<i>'спасибо', 'пожалуйста', 'рад помочь'</i>).")
-    if not compliance["no_stop_words"]:
-        stops_str = ", ".join([f"'{s}'" for s in compliance["found_stops"]])
-        recs.append(f"⚠️ <b>Обнаружены стоп-слова ({stops_str}):</b> Данные фразы вызывают сопротивление. Замените их на конструктивные формулировки.")
+        c_politeness_icon = "✗"
+        c_politeness_color = "#ef4444"
+        c_politeness_desc = "ASR отключен"
         
-    if not recs:
-        recs.append("🌟 <b>Идеальный звонок!</b> Все требования регламента (QA) соблюдены, уровень стресса в норме, темп речи оптимальный. Так держать!")
+        c_stops_icon = "✗"
+        c_stops_color = "#ef4444"
+        c_stops_desc = "ASR отключен"
         
-    recs_html = "".join([f"<li style='margin-bottom: 0.5rem;'>{r}</li>" for r in recs])
-    
-    c_greeting_icon = "✓" if compliance["greeting"] else "✗"
-    c_greeting_color = "#10b981" if compliance["greeting"] else "#ef4444"
-    c_greeting_desc = "Найдено слово приветствия" if compliance["greeting"] else "Приветствие отсутствует"
-    timeline_greeting_color = "#10b981" if compliance["greeting"] else "#ef4444"
-    
-    c_goodbye_icon = "✓" if compliance["goodbye"] else "✗"
-    c_goodbye_color = "#10b981" if compliance["goodbye"] else "#ef4444"
-    c_goodbye_desc = "Найдено слово прощания" if compliance["goodbye"] else "Прощание отсутствует"
-    timeline_goodbye_color = "#10b981" if compliance["goodbye"] else "#ef4444"
-    
-    c_politeness_icon = "✓" if compliance["politeness"] else "✗"
-    c_politeness_color = "#10b981" if compliance["politeness"] else "#ef4444"
-    c_politeness_desc = "Вежливые слова найдены" if compliance["politeness"] else "Добавьте больше вежливых фраз"
-    
-    c_stops_icon = "✓" if compliance["no_stop_words"] else "✗"
-    c_stops_color = "#10b981" if compliance["no_stop_words"] else "#ef4444"
-    c_stops_desc = "Токсичные стоп-слова не обнаружены" if compliance["no_stop_words"] else f"Обнаружено: {', '.join(compliance['found_stops'])}"
-    
-    # Сборка HTML реплик диалога
+        compliance = {"greeting": False, "goodbye": False, "politeness": False, "no_stop_words": False}
+    elif not enable_coach:
+        recs_html = """
+        <li style="margin-bottom: 0.5rem; list-style-type: none; color: #9ca3af;">
+            ℹ️ <b>Рекомендации AI Coach отключены</b> в настройках запуска.
+        </li>
+        """
+        c_greeting_icon = "✗"
+        c_greeting_color = "#9ca3af"
+        c_greeting_desc = "Отключено"
+        timeline_greeting_color = "#9ca3af"
+        
+        c_goodbye_icon = "✗"
+        c_goodbye_color = "#9ca3af"
+        c_goodbye_desc = "Отключено"
+        timeline_goodbye_color = "#9ca3af"
+        
+        c_politeness_icon = "✗"
+        c_politeness_color = "#9ca3af"
+        c_politeness_desc = "Отключено"
+        
+        c_stops_icon = "✗"
+        c_stops_color = "#9ca3af"
+        c_stops_desc = "Отключено"
+        
+        compliance = {"greeting": False, "goodbye": False, "politeness": False, "no_stop_words": False}
+    else:
+        compliance = check_compliance(res['transcription'])
+        
+        if stress >= 0.7:
+            recs.append("🚨 <b>Критический стресс:</b> У оператора/клиента зафиксирован пик напряжения. Менеджеру рекомендуется сделать паузу и выпить воды.")
+        elif stress >= 0.4:
+            recs.append("📈 <b>Повышенное волнение:</b> Старайтесь контролировать дыхание, сбавьте громкость и говорите ровным тоном.")
+            
+        tempo = features.get('tempo_bpm', 0)
+        if tempo > 145:
+            recs.append(f"⚡ <b>Слишком быстрый темп речи ({tempo:.0f} BPM):</b> Скорость превышает норму. Говорите медленнее, делайте паузы для лучшего понимания.")
+        elif tempo < 70 and tempo > 0:
+            recs.append(f"🐢 <b>Слишком медленный темп речи ({tempo:.0f} BPM):</b> Речь звучит пассивно. Постарайтесь говорить более динамично.")
+            
+        if not compliance["greeting"]:
+            recs.append("👋 <b>Нарушение регламента (Приветствие):</b> Менеджер не поприветствовал клиента. Используйте стандарт: <i>'Добрый день! Газпромбанк...'</i>.")
+        if not compliance["goodbye"]:
+            recs.append("🤝 <b>Нарушение регламента (Прощание):</b> В конце разговора не зафиксировано вежливого прощания.")
+        if not compliance["politeness"]:
+            recs.append("✨ <b>Рекомендация по вежливости:</b> Добавьте в диалог больше слов поддержки (<i>'спасибо', 'пожалуйста', 'рад помочь'</i>).")
+        if not compliance["no_stop_words"]:
+            stops_str = ", ".join([f"'{s}'" for s in compliance["found_stops"]])
+            recs.append(f"⚠️ <b>Обнаружены стоп-слова ({stops_str}):</b> Данные фразы вызывают сопротивление. Замените их на конструктивные формулировки.")
+            
+        if not recs:
+            recs.append("🌟 <b>Идеальный звонок!</b> Все требования регламента (QA) соблюдены, уровень стресса в норме, темп речи оптимальный. Так держать!")
+            
+        recs_html = "".join([f"<li style='margin-bottom: 0.5rem;'>{r}</li>" for r in recs])
+        
+        c_greeting_icon = "✓" if compliance["greeting"] else "✗"
+        c_greeting_color = "#10b981" if compliance["greeting"] else "#ef4444"
+        c_greeting_desc = "Найдено слово приветствия" if compliance["greeting"] else "Приветствие отсутствует"
+        timeline_greeting_color = "#10b981" if compliance["greeting"] else "#ef4444"
+        
+        c_goodbye_icon = "✓" if compliance["goodbye"] else "✗"
+        c_goodbye_color = "#10b981" if compliance["goodbye"] else "#ef4444"
+        c_goodbye_desc = "Найдено слово прощания" if compliance["goodbye"] else "Прощание отсутствует"
+        timeline_goodbye_color = "#10b981" if compliance["goodbye"] else "#ef4444"
+        
+        c_politeness_icon = "✓" if compliance["politeness"] else "✗"
+        c_politeness_color = "#10b981" if compliance["politeness"] else "#ef4444"
+        c_politeness_desc = "Вежливые слова найдены" if compliance["politeness"] else "Добавьте больше вежливых фраз"
+        
+        c_stops_icon = "✓" if compliance["no_stop_words"] else "✗"
+        c_stops_color = "#10b981" if compliance["no_stop_words"] else "#ef4444"
+        c_stops_desc = "Токсичные стоп-слова не обнаружены" if compliance["no_stop_words"] else f"Обнаружено: {', '.join(compliance['found_stops'])}"
+
+    # 3. Сборка HTML реплик диалога с учетом фильтра
     segments_html = []
-    for seg in res.get("segments", []):
-        spk = seg.get("speaker", "Спикер A")
-        txt = seg.get("text", "")
-        start = seg.get("start", 0.0)
-        end = seg.get("end", 0.0)
-        seg_stress = seg.get("final_stress", 0.0)
-        
-        highlighted_txt = highlight_keywords(txt)
-        
-        if seg_stress >= 0.7:
-            stress_badge_color = "#ef4444"
-        elif seg_stress >= 0.4:
-            stress_badge_color = "#f59e0b"
-        else:
-            stress_badge_color = "#10b981"
-            
-        is_client = "клиент" in spk.lower() or "спикер b" in spk.lower() or "спикер б" in spk.lower()
-        
-        if is_client:
-            align = "flex-end"
-            bg = "rgba(139, 92, 246, 0.08)"
-            border = "border-right: 3px solid #8b5cf6;"
-            margin = "margin-left: 20%;"
-            text_align = "right"
-        else:
-            align = "flex-start"
-            bg = "rgba(59, 130, 246, 0.08)"
-            border = "border-left: 3px solid #3b82f6;"
-            margin = "margin-right: 20%;"
-            text_align = "left"
-            
-        bubble = f"""
-        <div style="align-self: {align}; width: 80%; background: {bg}; {border} {margin} padding: 0.65rem 0.85rem; border-radius: 8px; margin-bottom: 0.75rem; text-align: {text_align}; box-sizing: border-box;">
-            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #9ca3af; margin-bottom: 0.25rem;">
-                <span style="font-weight: 600;">{spk} ({start:.1f}с - {end:.1f}с)</span>
-                <span style="color: {stress_badge_color}; font-weight: bold;">Стресс: {seg_stress * 100:.0f}%</span>
-            </div>
-            <span style="font-size: 0.95rem; color: #f3f4f6; line-height: 1.5;">"{highlighted_txt}"</span>
+    if not enable_asr:
+        dialogue_view_html = """
+        <div style="display: flex; flex-direction: column; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255,255,255,0.05); padding: 1.5rem; border-radius: 12px; text-align: center; color: #9ca3af; margin-bottom: 1.25rem;">
+            ⚠️ Распознавание речи (ASR) отключено в настройках запуска. Диалог не может быть отображен.
         </div>
         """
-        segments_html.append(bubble)
-        
-    dialogue_view_html = f"""
-    <div style="display: flex; flex-direction: column; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255,255,255,0.05); padding: 1rem; border-radius: 12px; max-height: 250px; overflow-y: auto; margin-bottom: 1.25rem; box-sizing: border-box;">
-        {"".join(segments_html)}
-    </div>
-    """
+    else:
+        for seg in all_segs:
+            spk = seg.get("speaker", "Спикер A")
+            txt = seg.get("text", "")
+            start = seg.get("start", 0.0)
+            end = seg.get("end", 0.0)
+            seg_stress = seg.get("final_stress", 0.0)
+            
+            is_client = "клиент" in spk.lower() or "спикер b" in spk.lower() or "спикер б" in spk.lower()
+            
+            if speaker_filter == "Только Оператор" and is_client:
+                continue
+            if speaker_filter == "Только Клиент" and not is_client:
+                continue
+                
+            highlighted_txt = highlight_keywords(txt)
+            
+            if seg_stress >= 0.7:
+                stress_badge_color = "#ef4444"
+            elif seg_stress >= 0.4:
+                stress_badge_color = "#f59e0b"
+            else:
+                stress_badge_color = "#10b981"
+                
+            if is_client:
+                align = "flex-end"
+                bg = "rgba(139, 92, 246, 0.08)"
+                border = "border-right: 3px solid #8b5cf6;"
+                margin = "margin-left: 20%;"
+                text_align = "right"
+            else:
+                align = "flex-start"
+                bg = "rgba(59, 130, 246, 0.08)"
+                border = "border-left: 3px solid #3b82f6;"
+                margin = "margin-right: 20%;"
+                text_align = "left"
+                
+            bubble = f"""
+            <div style="align-self: {align}; width: 80%; background: {bg}; {border} {margin} padding: 0.65rem 0.85rem; border-radius: 8px; margin-bottom: 0.75rem; text-align: {text_align}; box-sizing: border-box;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #9ca3af; margin-bottom: 0.25rem;">
+                    <span style="font-weight: 600;">{spk} ({start:.1f}с - {end:.1f}с)</span>
+                    <span style="color: {stress_badge_color}; font-weight: bold;">Стресс: {seg_stress * 100:.0f}%</span>
+                </div>
+                <span style="font-size: 0.95rem; color: #f3f4f6; line-height: 1.5;">"{highlighted_txt}"</span>
+            </div>
+            """
+            segments_html.append(bubble)
+            
+        if not segments_html:
+            dialogue_view_html = f"""
+            <div style="display: flex; flex-direction: column; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255,255,255,0.05); padding: 1.5rem; border-radius: 12px; text-align: center; color: #9ca3af; margin-bottom: 1.25rem; max-height: 550px; overflow-y: auto; box-sizing: border-box;">
+                Нет реплик спикера для фильтра: "{speaker_filter}"
+            </div>
+            """
+        else:
+            dialogue_view_html = f"""
+            <div style="display: flex; flex-direction: column; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255,255,255,0.05); padding: 1rem; border-radius: 12px; max-height: 550px; overflow-y: auto; margin-bottom: 1.25rem; box-sizing: border-box;">
+                {"".join(segments_html)}
+            </div>
+            """
     
     header_title = "📊 Результат Анализа (Симуляция)" if is_simulation else "📊 Результат Мультимодального Анализа"
     header_subtitle = "Режим быстрой эмуляции сценариев" if is_simulation else "Звонок обработан распределенной нейросетью"
@@ -1153,33 +1251,32 @@ def format_report_html(res, is_simulation=False):
         </div>
     </div>
     """
-    
-    comp_score = 0
-    if compliance["greeting"]: comp_score += 1
-    if compliance["goodbye"]: comp_score += 1
-    if compliance["politeness"]: comp_score += 1
-    if compliance["no_stop_words"]: comp_score += 1
-    
-    now = time.strftime("%H:%M:%S")
-    call_history.append({
-        "time": now,
-        "duration": f"{features.get('duration', 0)} с",
-        "compliance": f"{comp_score}/4",
-        "stress": f"{stress * 100:.0f}%",
-        "status": status_text
-    })
-    
     return report_html
 
-def run_simulation(example_type):
+def filter_speakers_report(current_state, selected_filter):
+    if current_state is None or "analysis_result" not in current_state:
+        return """
+        <div style="border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px; padding: 3rem; text-align: center; color: #9ca3af;">
+            Ожидание данных для фильтрации...
+        </div>
+        """
+    res = current_state["analysis_result"]
+    is_simulation = current_state.get("is_simulation", False)
+    options = current_state.get("options", {"enable_asr": True, "enable_audio_emo": True, "enable_coach": True})
+    return format_report_html(res, is_simulation=is_simulation, speaker_filter=selected_filter, add_to_history=False, options=options)
+
+def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach):
+    if not opt_asr:
+        opt_coach = False
+        
     # Симуляция разных сценариев
     if example_type == 1:
         text = "Добрый день! Газпромбанк, меня зовут Александр. Спасибо большое за ожидание. Подскажите, пожалуйста, номер вашего договора, я с радостью вам помогу всего хорошего."
         res = {
-            "transcription": text,
-            "text_stress": 0.05,
-            "audio_stress": 0.12,
-            "final_stress": 0.09,
+            "transcription": text if opt_asr else "",
+            "text_stress": 0.05 if opt_asr else 0.0,
+            "audio_stress": 0.12 if opt_audio else 0.0,
+            "final_stress": 0.09 if (opt_asr and opt_audio) else (0.12 if opt_audio else (0.05 if opt_asr else 0.0)),
             "features": {
                 "duration": 15,
                 "loudness_mean": -22,
@@ -1196,15 +1293,15 @@ def run_simulation(example_type):
                     "text_stress": 0.05,
                     "final_stress": 0.09
                 }
-            ]
+            ] if opt_asr else []
         }
     elif example_type == 2:
         text = "Да заткнитесь вы уже! Это ваша проблема, что вы не прочитали договор. Вы должны были внести платеж вчера! Это бред какой-то."
         res = {
-            "transcription": text,
-            "text_stress": 0.88,
-            "audio_stress": 0.95,
-            "final_stress": 0.92,
+            "transcription": text if opt_asr else "",
+            "text_stress": 0.88 if opt_asr else 0.0,
+            "audio_stress": 0.95 if opt_audio else 0.0,
+            "final_stress": 0.92 if (opt_asr and opt_audio) else (0.95 if opt_audio else (0.88 if opt_asr else 0.0)),
             "features": {
                 "duration": 18,
                 "loudness_mean": -12,
@@ -1221,15 +1318,15 @@ def run_simulation(example_type):
                     "text_stress": 0.88,
                     "final_stress": 0.92
                 }
-            ]
+            ] if opt_asr else []
         }
     else:
         text = "Здравствуйте... Ой, извините, я не знаю, наверное... Да-да, сейчас я посмотрю информацию, подождите секундочку, пожалуйста, я постараюсь быстрее..."
         res = {
-            "transcription": text,
-            "text_stress": 0.35,
-            "audio_stress": 0.55,
-            "final_stress": 0.47,
+            "transcription": text if opt_asr else "",
+            "text_stress": 0.35 if opt_asr else 0.0,
+            "audio_stress": 0.55 if opt_audio else 0.0,
+            "final_stress": 0.47 if (opt_asr and opt_audio) else (0.55 if opt_audio else (0.35 if opt_asr else 0.0)),
             "features": {
                 "duration": 22,
                 "loudness_mean": -18,
@@ -1246,45 +1343,84 @@ def run_simulation(example_type):
                     "text_stress": 0.35,
                     "final_stress": 0.47
                 }
-            ]
+            ] if opt_asr else []
         }
         
-    chart_path = pipeline.plot_emotion_timeline(res["segments"], res["features"]["duration"])
+    res["options"] = {
+        "enable_asr": opt_asr,
+        "enable_audio_emo": opt_audio,
+        "enable_coach": opt_coach
+    }
+    
+    chart_path = None
+    if opt_asr and res["segments"]:
+        chart_path = pipeline.plot_emotion_timeline(res["segments"], res["features"]["duration"])
     res["chart_path"] = chart_path
     
-    report_html = format_report_html(res, is_simulation=True)
+    state_val = {
+        "analysis_result": res,
+        "is_simulation": True,
+        "options": res["options"]
+    }
+    
+    report_html = format_report_html(res, is_simulation=True, speaker_filter="Все участники", add_to_history=True, options=state_val["options"])
     if chart_path and os.path.exists(chart_path):
         chart_update = gr.update(value=chart_path, visible=True)
     else:
         chart_update = gr.update(visible=False)
         
-    return report_html, chart_update, generate_kpi_html(), generate_history_html()
+    return report_html, chart_update, generate_kpi_html(), generate_history_html(), state_val
 
-def predict(audio):
+def predict_wrapper(audio, opt_asr, opt_audio, opt_coach):
     if audio is None:
         return """
         <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 1rem; color: #f87171; text-align: center;">
             ⚠️ Пожалуйста, запишите или загрузите аудиофайл.
         </div>
-        """, gr.update(visible=False), generate_kpi_html(), generate_history_html()
+        """, gr.update(visible=False), generate_kpi_html(), generate_history_html(), None
         
-    res = pipeline.run_analysis(audio)
-    report_html = format_report_html(res, is_simulation=False)
+    if not opt_asr:
+        opt_coach = False
+        
+    file_hash = get_file_md5(audio)
+    cached_res = GLOBAL_MD5_CACHE.get(file_hash) if file_hash else None
+    
+    if cached_res:
+        print(f"[CACHE HIT] Результат для {file_hash} взят из глобального кеша.")
+        res = cached_res
+    else:
+        res = pipeline.run_analysis(audio, enable_asr=opt_asr, enable_audio_emo=opt_audio, enable_coach=opt_coach)
+        if file_hash:
+            GLOBAL_MD5_CACHE[file_hash] = res
+            
+    res["options"] = {
+        "enable_asr": opt_asr,
+        "enable_audio_emo": opt_audio,
+        "enable_coach": opt_coach
+    }
+    
+    state_val = {
+        "analysis_result": res,
+        "is_simulation": False,
+        "options": res["options"]
+    }
+    
+    report_html = format_report_html(res, is_simulation=False, speaker_filter="Все участники", add_to_history=True, options=state_val["options"])
     chart_path = res.get("chart_path")
     if chart_path and os.path.exists(chart_path):
         chart_update = gr.update(value=chart_path, visible=True)
     else:
         chart_update = gr.update(visible=False)
-        
-    return report_html, chart_update, generate_kpi_html(), generate_history_html()
+    
+    return report_html, chart_update, generate_kpi_html(), generate_history_html(), state_val
 
 def toggle_mode(mode):
     if mode == "Поштучный (Single)":
-        return gr.update(visible=True), gr.update(visible=True), gr.update(visible=False), gr.update(visible=False)
+        return gr.update(visible=True), gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=True)
     else:
-        return gr.update(visible=False), gr.update(visible=False), gr.update(visible=True), gr.update(visible=True)
+        return gr.update(visible=False), gr.update(visible=False), gr.update(visible=True), gr.update(visible=True), gr.update(visible=False)
 
-def predict_batch_ui(files):
+def predict_batch_ui(files, opt_asr, opt_audio, opt_coach):
     if not files:
         return """
         <div style="border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px; padding: 3rem; text-align: center; color: #ef4444;">
@@ -1293,7 +1429,7 @@ def predict_batch_ui(files):
         """, gr.update(visible=False), generate_kpi_html(), generate_history_html()
         
     file_paths = [f.name if hasattr(f, "name") else f for f in files]
-    batch_res = pipeline.run_analysis_batch(file_paths)
+    batch_res = pipeline.run_analysis_batch(file_paths, enable_asr=opt_asr, enable_audio_emo=opt_audio, enable_coach=opt_coach)
     
     rows = ""
     for idx, res in enumerate(batch_res):
@@ -1314,15 +1450,21 @@ def predict_batch_ui(files):
             verdict = "Стабильное состояние ✅"
             advice = "Диалог проведен отлично"
             
-        compliance = check_compliance(res.get("transcription", ""))
-        comp_score = 0
-        if compliance["greeting"]: comp_score += 1
-        if compliance["goodbye"]: comp_score += 1
-        if compliance["politeness"]: comp_score += 1
-        if compliance["no_stop_words"]: comp_score += 1
-        
-        comp_str = f"{comp_score}/4"
-        if comp_score == 4:
+        if opt_asr:
+            compliance = check_compliance(res.get("transcription", ""))
+            comp_score = 0
+            if compliance["greeting"]: comp_score += 1
+            if compliance["goodbye"]: comp_score += 1
+            if compliance["politeness"]: comp_score += 1
+            if compliance["no_stop_words"]: comp_score += 1
+            comp_str = f"{comp_score}/4"
+        else:
+            comp_score = 0
+            comp_str = "Отключено"
+            
+        if comp_str == "Отключено":
+            comp_style = "color: #9ca3af;"
+        elif comp_score == 4:
             comp_style = "color: #10b981; font-weight: bold;"
         elif comp_score >= 2:
             comp_style = "color: #fbbf24; font-weight: bold;"
@@ -1368,7 +1510,13 @@ def predict_batch_ui(files):
     return table_html, gr.update(visible=False), generate_kpi_html(), generate_history_html()
 
 @app.post("/api/analyze_batch")
-async def api_analyze_batch(files: list[UploadFile] = File(...), operator: str = Form(None)):
+async def api_analyze_batch(
+    files: list[UploadFile] = File(...), 
+    operator: str = Form(None),
+    enable_asr: bool = Form(True),
+    enable_audio_emo: bool = Form(True),
+    enable_coach: bool = Form(True)
+):
     """Выполняет пакетный анализ списка аудиофайлов."""
     temp_paths = []
     import tempfile
@@ -1380,12 +1528,16 @@ async def api_analyze_batch(files: list[UploadFile] = File(...), operator: str =
             temp_paths.append(temp.name)
             
     try:
-        batch_res = pipeline.run_analysis_batch(temp_paths)
+        batch_res = pipeline.run_analysis_batch(temp_paths, enable_asr=enable_asr, enable_audio_emo=enable_audio_emo, enable_coach=enable_coach)
         
         # Добавляем комплаенс и суммаризацию для каждого
         for res in batch_res:
-            res["compliance"] = check_compliance(res["transcription"])
-            res["summary"] = generate_summary(res["transcription"], res, res["compliance"])
+            if enable_asr:
+                res["compliance"] = check_compliance(res["transcription"])
+                res["summary"] = generate_summary(res["transcription"], res, res["compliance"])
+            else:
+                res["compliance"] = {"greeting": False, "goodbye": False, "politeness": False, "no_stop_words": False}
+                res["summary"] = "ASR отключен"
             
             # Сохраняем в БД для каждого файла, если передан оператор
             if operator:
@@ -1434,6 +1586,7 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
     with gr.Tabs() as tabs:
         # Вкладка 1: Анализ речи
         with gr.Tab("🎙 Анализатор"):
+            current_analysis_state = gr.State(None)
             with gr.Row():
                 with gr.Column(scale=5):
                     gr.Markdown("### 📥 Входной аудиопоток")
@@ -1444,6 +1597,12 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
                         value="Поштучный (Single)", 
                         label="Режим обработки"
                     )
+                    
+                    gr.Markdown("#### ⚙️ Опции анализа")
+                    with gr.Row():
+                        opt_asr = gr.Checkbox(label="Распознавание текста (ASR)", value=True)
+                        opt_audio = gr.Checkbox(label="Анализ акустики (Emo)", value=True)
+                        opt_coach = gr.Checkbox(label="AI Рекомендации (Coach)", value=True)
                     
                     # Поштучный uploader
                     audio_in = gr.Audio(
@@ -1472,6 +1631,12 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
                         sim_btn_3 = gr.Button("🟡 Пример 3 (Волнение)", variant="secondary")
                     
                 with gr.Column(scale=6):
+                    speaker_filter = gr.Radio(
+                        choices=["Все участники", "Только Оператор", "Только Клиент"],
+                        value="Все участники",
+                        label="Фильтр дикторов",
+                        visible=True
+                    )
                     gr.Markdown("### 📊 Отчет анализатора")
                     output_html = gr.HTML(
                         value="""
@@ -1492,24 +1657,39 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
             gr.HTML(value=generate_apk_download_html())
             
             # Логика событий
-            btn.click(fn=predict, inputs=[audio_in], outputs=[output_html, chart_img, kpi_dashboard, history_table])
-            batch_btn.click(fn=predict_batch_ui, inputs=[batch_in], outputs=[output_html, chart_img, kpi_dashboard, history_table])
+            btn.click(
+                fn=predict_wrapper, 
+                inputs=[audio_in, opt_asr, opt_audio, opt_coach], 
+                outputs=[output_html, chart_img, kpi_dashboard, history_table, current_analysis_state]
+            )
+            batch_btn.click(
+                fn=predict_batch_ui, 
+                inputs=[batch_in, opt_asr, opt_audio, opt_coach], 
+                outputs=[output_html, chart_img, kpi_dashboard, history_table]
+            )
             
             # Переключение режима
             mode_select.change(
                 fn=toggle_mode,
                 inputs=[mode_select],
-                outputs=[audio_in, btn, batch_in, batch_btn]
+                outputs=[audio_in, btn, batch_in, batch_btn, speaker_filter]
             )
             
             # Функции-обертки для демо-кнопок
-            def load_sim1(): return run_simulation(1)
-            def load_sim2(): return run_simulation(2)
-            def load_sim3(): return run_simulation(3)
+            def load_sim1(opt_asr, opt_audio, opt_coach): return run_simulation_wrapper(1, opt_asr, opt_audio, opt_coach)
+            def load_sim2(opt_asr, opt_audio, opt_coach): return run_simulation_wrapper(2, opt_asr, opt_audio, opt_coach)
+            def load_sim3(opt_asr, opt_audio, opt_coach): return run_simulation_wrapper(3, opt_asr, opt_audio, opt_coach)
             
-            sim_btn_1.click(fn=load_sim1, inputs=[], outputs=[output_html, chart_img, kpi_dashboard, history_table])
-            sim_btn_2.click(fn=load_sim2, inputs=[], outputs=[output_html, chart_img, kpi_dashboard, history_table])
-            sim_btn_3.click(fn=load_sim3, inputs=[], outputs=[output_html, chart_img, kpi_dashboard, history_table])
+            sim_btn_1.click(fn=load_sim1, inputs=[opt_asr, opt_audio, opt_coach], outputs=[output_html, chart_img, kpi_dashboard, history_table, current_analysis_state])
+            sim_btn_2.click(fn=load_sim2, inputs=[opt_asr, opt_audio, opt_coach], outputs=[output_html, chart_img, kpi_dashboard, history_table, current_analysis_state])
+            sim_btn_3.click(fn=load_sim3, inputs=[opt_asr, opt_audio, opt_coach], outputs=[output_html, chart_img, kpi_dashboard, history_table, current_analysis_state])
+            
+            # Легкая интерактивная фильтрация при изменении Radio-кнопки
+            speaker_filter.change(
+                fn=filter_speakers_report,
+                inputs=[current_analysis_state, speaker_filter],
+                outputs=[output_html]
+            )
             
         # Вкладка 2: Настройка распределения
         with gr.Tab("⚙️ Распределение вычислений"):
