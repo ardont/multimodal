@@ -486,12 +486,34 @@ def refresh_nodes_status():
     html += '</div>'
     return html
 
+def load_compliance_rules():
+    default_rules = {
+        "greetings": ["здравствуй", "добрый день", "доброе утро", "добрый вечер", "приветствую", "алло", "слушаю"],
+        "goodbyes": ["до свидания", "всего доброго", "всего хорошего", "до встречи", "хорошего дня", "пока"],
+        "politeness": ["спасибо", "пожалуйста", "благодарю", "извините", "прошу прощения", "рад помочь"],
+        "stop_words": ["вы должны", "ваша проблема", "не знаю", "ужас", "бред", "заткнись", "заткнитесь", "глупость"]
+    }
+    
+    rules_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compliance_templates.json")
+    if os.path.exists(rules_path):
+        try:
+            import json
+            with open(rules_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if all(k in loaded for k in default_rules.keys()):
+                    return loaded
+        except Exception as e:
+            print(f"[Rules Load Warning] {e}")
+            
+    return default_rules
+
 def check_compliance(text):
     text_lower = text.lower()
-    greetings = ["здравствуй", "добрый день", "доброе утро", "добрый вечер", "приветствую", "алло", "слушаю"]
-    goodbyes = ["до свидания", "всего доброго", "всего хорошего", "до встречи", "хорошего дня", "пока"]
-    politeness = ["спасибо", "пожалуйста", "благодарю", "извините", "прошу прощения", "рад помочь"]
-    stop_words = ["вы должны", "ваша проблема", "не знаю", "ужас", "бред", "заткнись", "заткнитесь", "глупость"]
+    rules = load_compliance_rules()
+    greetings = rules.get("greetings", [])
+    goodbyes = rules.get("goodbyes", [])
+    politeness = rules.get("politeness", [])
+    stop_words = rules.get("stop_words", [])
     
     has_greeting = any(g in text_lower for g in greetings)
     has_goodbye = any(g in text_lower for g in goodbyes)
@@ -1019,7 +1041,7 @@ def format_report_html(res, is_simulation=False, speaker_filter="Все учас
             recs.append(f"🐢 <b>Слишком медленный темп речи ({tempo:.0f} BPM):</b> Речь звучит пассивно. Постарайтесь говорить более динамично.")
             
         if not compliance["greeting"]:
-            recs.append("👋 <b>Нарушение регламента (Приветствие):</b> Менеджер не поприветствовал клиента. Используйте стандарт: <i>'Добрый день! Газпромбанк...'</i>.")
+            recs.append("👋 <b>Нарушение регламента (Приветствие):</b> В диалоге отсутствует вежливое приветствие (например: <i>'Добрый день'</i>, <i>'Здравствуйте'</i>).")
         if not compliance["goodbye"]:
             recs.append("🤝 <b>Нарушение регламента (Прощание):</b> В конце разговора не зафиксировано вежливого прощания.")
         if not compliance["politeness"]:
@@ -1069,9 +1091,9 @@ def format_report_html(res, is_simulation=False, speaker_filter="Все учас
             
             is_client = "клиент" in spk.lower() or "спикер b" in spk.lower() or "спикер б" in spk.lower()
             
-            if speaker_filter == "Только Оператор" and is_client:
+            if speaker_filter == "Только Спикер А" and is_client:
                 continue
-            if speaker_filter == "Только Клиент" and not is_client:
+            if speaker_filter == "Только Спикер Б" and not is_client:
                 continue
                 
             highlighted_txt = highlight_keywords(txt)
@@ -1349,6 +1371,10 @@ def export_pdf_report(current_state):
     # Конвертируем в светлую тему
     light_html = convert_html_to_light_theme(html_content)
     
+    # Заменяем шрифт Outfit на DejaVuSans для поддержки кириллицы в инлайн-стилях
+    light_html = light_html.replace("'Outfit'", "'DejaVuSans'")
+    light_html = light_html.replace('"Outfit"', "'DejaVuSans'")
+    
     # Подготовка шрифтов (при этом шрифт регистрируется в ReportLab)
     has_font = get_dejavu_font_path()
     if has_font:
@@ -1394,7 +1420,7 @@ def export_pdf_report(current_state):
     </head>
     <body>
         <div style="text-align: right; color: #6b7280; font-size: 8pt; margin-bottom: 15px;">
-            Сгенерировано системой Multimodal AI (Газпромбанк)
+            Сгенерировано системой Multimodal AI Speech
         </div>
         {light_html}
     </body>
@@ -1462,7 +1488,7 @@ def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach):
         
     # Симуляция разных сценариев
     if example_type == 1:
-        text = "Добрый день! Газпромбанк, меня зовут Александр. Спасибо большое за ожидание. Подскажите, пожалуйста, номер вашего договора, я с радостью вам помогу всего хорошего."
+        text = "Добрый день! Рад приветствовать вас. Спасибо большое за ожидание, я с радостью вам помогу с анализом проекта, всего хорошего."
         res = {
             "transcription": text if opt_asr else "",
             "text_stress": 0.05 if opt_asr else 0.0,
@@ -1478,7 +1504,7 @@ def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach):
                 {
                     "start": 0.0,
                     "end": 15.0,
-                    "speaker": "Оператор (Спикер А)",
+                    "speaker": "Спикер А",
                     "text": text,
                     "audio_stress": 0.12,
                     "text_stress": 0.05,
@@ -1487,7 +1513,7 @@ def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach):
             ] if opt_asr else []
         }
     elif example_type == 2:
-        text = "Да заткнитесь вы уже! Это ваша проблема, что вы не прочитали договор. Вы должны были внести платеж вчера! Это бред какой-то."
+        text = "Да заткнитесь вы уже! Это ваша проблема, что вы не прочитали выводы. Это бред какой-то!"
         res = {
             "transcription": text if opt_asr else "",
             "text_stress": 0.88 if opt_asr else 0.0,
@@ -1503,7 +1529,7 @@ def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach):
                 {
                     "start": 0.0,
                     "end": 18.0,
-                    "speaker": "Клиент (Спикер Б)",
+                    "speaker": "Спикер Б",
                     "text": text,
                     "audio_stress": 0.95,
                     "text_stress": 0.88,
@@ -1512,7 +1538,7 @@ def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach):
             ] if opt_asr else []
         }
     else:
-        text = "Здравствуйте... Ой, извините, я не знаю, наверное... Да-да, сейчас я посмотрю информацию, подождите секундочку, пожалуйста, я постараюсь быстрее..."
+        text = "Здравствуйте... Ой, извините, я не знаю, наверное... Да-да, сейчас я посмотрю информацию в реферате, подождите секундочку, пожалуйста..."
         res = {
             "transcription": text if opt_asr else "",
             "text_stress": 0.35 if opt_asr else 0.0,
@@ -1528,7 +1554,7 @@ def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach):
                 {
                     "start": 0.0,
                     "end": 22.0,
-                    "speaker": "Клиент (Спикер Б)",
+                    "speaker": "Спикер Б",
                     "text": text,
                     "audio_stress": 0.55,
                     "text_stress": 0.35,
@@ -1823,7 +1849,7 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
                     
                 with gr.Column(scale=6):
                     speaker_filter = gr.Radio(
-                        choices=["Все участники", "Только Оператор", "Только Клиент"],
+                        choices=["Все участники", "Только Спикер А", "Только Спикер Б"],
                         value="Все участники",
                         label="Фильтр дикторов",
                         visible=True
