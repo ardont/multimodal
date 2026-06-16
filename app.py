@@ -508,10 +508,13 @@ def check_compliance(text):
         "found_stops": found_stops
     }
 
-def generate_summary(text, res, compliance):
-    if not text.strip():
-        return "Диалог пуст или не распознан."
+def generate_summary(text, res, compliance, options=None):
+    if options is None:
+        options = res.get("options", {})
         
+    enable_asr = options.get("enable_asr", True)
+    enable_audio_emo = options.get("enable_audio_emo", True)
+    
     summary_lines = []
     
     # 1. Общий вердикт по стрессу
@@ -524,58 +527,66 @@ def generate_summary(text, res, compliance):
         
     summary_lines.append(f"📊 **Итог анализа:** Общий уровень стресса: {int(final_stress * 100)}% ({stress_status}).")
     
-    # 2. Соблюдение регламента
-    passed_rules = []
-    failed_rules = []
-    
-    if compliance.get("greeting"): passed_rules.append("Приветствие")
-    else: failed_rules.append("Приветствие")
-    
-    if compliance.get("goodbye"): passed_rules.append("Прощание")
-    else: failed_rules.append("Прощание")
-    
-    if compliance.get("politeness"): passed_rules.append("Вежливость")
-    else: failed_rules.append("Вежливость")
-    
-    if compliance.get("no_stop_words"): passed_rules.append("Отсутствие стоп-слов")
-    else: failed_rules.append(f"Обнаружены стоп-слова ({', '.join(compliance.get('found_stops', []))})")
-    
-    if passed_rules:
-        summary_lines.append(f"✅ **Соблюдено:** {', '.join(passed_rules)}.")
-    if failed_rules:
-        summary_lines.append(f"❌ **Нарушено:** {', '.join(failed_rules)}.")
+    # Акустический анализ
+    if enable_audio_emo:
+        summary_lines.append(f"🎵 Акустический анализ проведен. Стресс по голосу: {int(res.get('audio_stress', 0.0) * 100)}%.")
+    else:
+        summary_lines.append("⛔ Акустический анализ эмоций отключен пользователем.")
         
-    # 3. Ключевые моменты (выделение важных предложений)
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    key_sentences = []
-    
-    keywords = ["карта", "счет", "кредит", "ошибка", "проблема", "заблокировано", "деньги", "перевод", "пароль", "договор", "заявление"]
-    
-    for s in sentences:
-        s_clean = s.strip()
-        if not s_clean:
-            continue
-        s_lower = s_clean.lower()
-        if any(kw in s_lower for kw in keywords) or any(st in s_lower for st in ["вы должны", "ваша проблема", "не знаю", "ужас", "бред", "заткнись"]):
-            key_sentences.append(f"• {s_clean}")
+    # Текстовый анализ (ASR)
+    if enable_asr:
+        # 2. Соблюдение регламента
+        passed_rules = []
+        failed_rules = []
+        
+        if compliance.get("greeting"): passed_rules.append("Приветствие")
+        else: failed_rules.append("Приветствие")
+        
+        if compliance.get("goodbye"): passed_rules.append("Прощание")
+        else: failed_rules.append("Прощание")
+        
+        if compliance.get("politeness"): passed_rules.append("Вежливость")
+        else: failed_rules.append("Вежливость")
+        
+        if compliance.get("no_stop_words"): passed_rules.append("Отсутствие стоп-слов")
+        else: failed_rules.append(f"Обнаружены стоп-слова ({', '.join(compliance.get('found_stops', []))})")
+        
+        if passed_rules:
+            summary_lines.append(f"✅ **Соблюдено:** {', '.join(passed_rules)}.")
+        if failed_rules:
+            summary_lines.append(f"❌ **Нарушено:** {', '.join(failed_rules)}.")
             
-    if key_sentences:
-        summary_lines.append("\n📌 **Ключевые моменты разговора:**")
-        summary_lines.extend(key_sentences[:4])
-    else:
-        non_empty = [s.strip() for s in sentences if s.strip()]
-        if non_empty:
-            summary_lines.append("\n📌 **Ключевые моменты разговора:**")
-            for s in non_empty[:2]:
-                summary_lines.append(f"• {s}")
+        # 3. Ключевые моменты
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        key_sentences = []
+        keywords = ["карта", "счет", "кредит", "ошибка", "проблема", "заблокировано", "деньги", "перевод", "пароль", "договор", "заявление"]
+        for s in sentences:
+            s_clean = s.strip()
+            if not s_clean:
+                continue
+            s_lower = s_clean.lower()
+            if any(kw in s_lower for kw in keywords) or any(st in s_lower for st in ["вы должны", "ваша проблема", "не знаю", "ужас", "бред", "заткнись"]):
+                key_sentences.append(f"• {s_clean}")
                 
-    # 4. Рекомендация
-    if final_stress > 0.4:
-        summary_lines.append("\n💡 **Рекомендация:** У оператора зафиксирован повышенный стресс. Рекомендуется сделать перерыв или разобрать диалог с супервизором.")
-    elif not compliance.get("greeting") or not compliance.get("goodbye"):
-        summary_lines.append("\n💡 **Рекомендация:** Обратить внимание на соблюдение обязательных фраз приветствия и прощания.")
+        if key_sentences:
+            summary_lines.append("\n📌 **Ключевые моменты разговора:**")
+            summary_lines.extend(key_sentences[:4])
+        else:
+            non_empty = [s.strip() for s in sentences if s.strip()]
+            if non_empty:
+                summary_lines.append("\n📌 **Ключевые моменты разговора:**")
+                for s in non_empty[:2]:
+                    summary_lines.append(f"• {s}")
+                    
+        # 4. Рекомендация
+        if final_stress > 0.4:
+            summary_lines.append("\n💡 **Рекомендация:** У оператора зафиксирован повышенный стресс. Рекомендуется сделать перерыв или разобрать диалог с супервизором.")
+        elif not compliance.get("greeting") or not compliance.get("goodbye"):
+            summary_lines.append("\n💡 **Рекомендация:** Обратить внимание на соблюдение обязательных фраз приветствия и прощания.")
+        else:
+            summary_lines.append("\n💡 **Рекомендация:** Диалог проведен отлично, регламент полностью соблюден.")
     else:
-        summary_lines.append("\n💡 **Рекомендация:** Диалог проведен отлично, регламент полностью соблюден.")
+        summary_lines.append("⛔ Распознавание речи (ASR) отключено пользователем. Анализ текста и комплаенс не проводились.")
         
     return "\n".join(summary_lines)
 
@@ -1265,6 +1276,186 @@ def filter_speakers_report(current_state, selected_filter):
     options = current_state.get("options", {"enable_asr": True, "enable_audio_emo": True, "enable_coach": True})
     return format_report_html(res, is_simulation=is_simulation, speaker_filter=selected_filter, add_to_history=False, options=options)
 
+def get_dejavu_font_path():
+    try:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        import matplotlib
+        font_dir = os.path.join(os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf")
+        font_path = os.path.join(font_dir, "DejaVuSans.ttf")
+        if os.path.exists(font_path):
+            try:
+                # Регистрируем в ReportLab напрямую, если не зарегистрирован
+                if 'DejaVuSans' not in pdfmetrics.getRegisteredFontNames():
+                    pdfmetrics.registerFont(TTFont('DejaVuSans', font_path))
+                return "registered"
+            except Exception as e:
+                print(f"[PDF Font Register Warning] {e}")
+    except Exception as e:
+        print(f"[Font Path Warning] {e}")
+        pass
+    return ""
+
+def convert_html_to_light_theme(html):
+    # Фоновые и структурные стили
+    html = html.replace("rgba(10, 15, 26, 0.65)", "#ffffff")
+    html = html.replace("background: rgba(10, 15, 26, 0.65)", "background: #ffffff; border: 1px solid #e5e7eb;")
+    html = html.replace("background: rgba(0, 0, 0, 0.25)", "background: #f9fafb; border: 1px solid #e5e7eb;")
+    html = html.replace("background: rgba(0, 0, 0, 0.2)", "background: #f9fafb; border: 1px solid #e5e7eb;")
+    html = html.replace("background: rgba(255, 255, 255, 0.02)", "background: #f9fafb; border: 1px solid #e5e7eb;")
+    html = html.replace("background: rgba(255,255,255,0.02)", "background: #f9fafb; border: 1px solid #e5e7eb;")
+    html = html.replace("background: rgba(255,255,255,0.01)", "background: #f9fafb; border: 1px solid #e5e7eb;")
+    html = html.replace("rgba(255, 255, 255, 0.05)", "#e5e7eb")
+    html = html.replace("rgba(255,255,255,0.05)", "#e5e7eb")
+    html = html.replace("rgba(255,255,255,0.04)", "#e5e7eb")
+    html = html.replace("rgba(255, 255, 255, 0.08)", "#d1d5db")
+    html = html.replace("rgba(255,255,255,0.08)", "#d1d5db")
+    html = html.replace("rgba(255,255,255,0.1)", "#d1d5db")
+    html = html.replace("border-left: 3px solid #3b82f6;", "border-left: 3px solid #3b82f6; background-color: #eff6ff;")
+    html = html.replace("border-right: 3px solid #8b5cf6;", "border-right: 3px solid #8b5cf6; background-color: #f5f3ff;")
+    html = html.replace("rgba(59, 130, 246, 0.08)", "#eff6ff")
+    html = html.replace("rgba(139, 92, 246, 0.08)", "#f5f3ff")
+    html = html.replace("background-color: rgba(255,255,255,0.08)", "background-color: #e5e7eb")
+    
+    # Стили текста
+    html = html.replace("color: #f3f4f6", "color: #111827")
+    html = html.replace("color: #f3f4f6;", "color: #111827;")
+    html = html.replace("color: #e5e7eb", "color: #374151")
+    html = html.replace("color: #e5e7eb;", "color: #374151;")
+    html = html.replace("color: #9ca3af", "color: #6b7280")
+    html = html.replace("color: #9ca3af;", "color: #6b7280;")
+    html = html.replace("color: #d1d5db", "color: #374151")
+    html = html.replace("color: #d1d5db;", "color: #374151;")
+    html = html.replace("color: #fff", "color: #111827")
+    html = html.replace("color: #fff;", "color: #111827;")
+    html = html.replace("-webkit-text-fill-color: transparent;", "")
+    
+    # AI Coach плашка
+    html = html.replace("background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(37, 99, 235, 0.08) 100%); border: 1px solid rgba(139, 92, 246, 0.25);", 
+                        "background: #f5f3ff; border: 1px solid #c084fc;")
+    
+    return html
+
+def export_pdf_report(current_state):
+    if current_state is None or "analysis_result" not in current_state:
+        return None
+        
+    res = current_state["analysis_result"]
+    is_simulation = current_state.get("is_simulation", False)
+    options = current_state.get("options", {"enable_asr": True, "enable_audio_emo": True, "enable_coach": True})
+    
+    html_content = format_report_html(res, is_simulation=is_simulation, speaker_filter="Все участники", add_to_history=False, options=options)
+    
+    # Конвертируем в светлую тему
+    light_html = convert_html_to_light_theme(html_content)
+    
+    # Подготовка шрифтов (при этом шрифт регистрируется в ReportLab)
+    has_font = get_dejavu_font_path()
+    if has_font:
+        font_face_css = """
+        body {
+            font-family: 'DejaVuSans', sans-serif;
+        }
+        """
+    else:
+        font_face_css = """
+        body {
+            font-family: sans-serif;
+        }
+        """
+        
+    styled_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            @page {{
+                size: a4;
+                margin: 1cm;
+            }}
+            {font_face_css}
+            body {{
+                color: #111827;
+                background-color: #ffffff;
+                font-size: 10pt;
+            }}
+            .report-card {{
+                padding: 20px;
+                background: #ffffff;
+                border: 1px solid #e5e7eb;
+                border-radius: 12px;
+            }}
+            div {{
+                max-height: none !important;
+                overflow: visible !important;
+            }}
+        </style>
+    </head>
+    <body>
+        <div style="text-align: right; color: #6b7280; font-size: 8pt; margin-bottom: 15px;">
+            Сгенерировано системой Multimodal AI (Газпромбанк)
+        </div>
+        {light_html}
+    </body>
+    </html>
+    """
+    
+    try:
+        from xhtml2pdf import pisa
+        temp_pdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        # На Windows NamedTemporaryFile нужно закрыть перед записью через pisa.CreatePDF,
+        # но CreatePDF принимает открытый файловый объект. Так как pisa открывает dest для записи,
+        # мы можем просто передать открытый файл, а потом закрыть его, но во избежание WinError 32
+        # на некоторых версиях мы делаем это через обычный open().
+        file_path = temp_pdf.name
+        temp_pdf.close() # закрываем NamedTemporaryFile, чтобы освободить хэндл в Windows
+        
+        with open(file_path, "wb") as f:
+            pisa.CreatePDF(styled_html, dest=f)
+        return file_path
+    except Exception as e:
+        print(f"[PDF Export Error] {e}")
+        return None
+
+def export_txt_report(current_state):
+    if current_state is None or "analysis_result" not in current_state:
+        return None
+        
+    res = current_state["analysis_result"]
+    options = current_state.get("options", {})
+    
+    enable_asr = options.get("enable_asr", True)
+    enable_audio_emo = options.get("enable_audio_emo", True)
+    
+    lines = []
+    lines.append("=" * 60)
+    lines.append("ОТЧЕТ ПО ЗВОНКУ (MULTIMODAL SPEECH ANALYSIS)")
+    lines.append("=" * 60)
+    lines.append(f"Дата/Время отчета: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"Общий индекс аномалии: {res.get('final_stress', 0.0) * 100:.0f}%")
+    lines.append(f"Текстовый стресс: {res.get('text_stress', 0.0) * 100:.0f}%")
+    lines.append(f"Акустический стресс: {res.get('audio_stress', 0.0) * 100:.0f}%")
+    lines.append("-" * 60)
+    
+    if enable_asr:
+        lines.append("ДИАЛОГ:")
+        for seg in res.get("segments", []):
+            lines.append(f"[{seg.get('speaker', 'Спикер')}]: {seg.get('text', '')} (Стресс: {seg.get('final_stress', 0.0) * 100:.0f}%)")
+    else:
+        lines.append("Диалог: Распознавание текста (ASR) было отключено.")
+        
+    lines.append("-" * 60)
+    lines.append("ИНТЕЛЛЕКТУАЛЬНЫЙ КОНСПЕКТ (SUMMARY):")
+    comp = check_compliance(res.get("transcription", "")) if enable_asr else {"greeting": False, "goodbye": False, "politeness": False, "no_stop_words": False}
+    lines.append(generate_summary(res.get("transcription", ""), res, comp, options=options))
+    lines.append("=" * 60)
+    
+    temp_txt = tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w", encoding="utf-8")
+    temp_txt.write("\n".join(lines))
+    temp_txt.close()
+    return temp_txt.name
+
 def run_simulation_wrapper(example_type, opt_asr, opt_audio, opt_coach):
     if not opt_asr:
         opt_coach = False
@@ -1646,6 +1837,9 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
                         """
                     )
                     chart_img = gr.Image(label="Эмоциональная динамика звонка во времени", visible=False, type="filepath")
+                    with gr.Row():
+                        download_txt_btn = gr.DownloadButton("💾 Скачать TXT-отчет", variant="secondary")
+                        download_pdf_btn = gr.DownloadButton("📄 Скачать PDF-отчет", variant="secondary")
             
             gr.Markdown("### 📈 Сводный дашборд KPI (Сессия)")
             kpi_dashboard = gr.HTML(value=generate_kpi_html())
@@ -1689,6 +1883,18 @@ with gr.Blocks(title="GPB MER Distributed MVP") as demo:
                 fn=filter_speakers_report,
                 inputs=[current_analysis_state, speaker_filter],
                 outputs=[output_html]
+            )
+            
+            # Кнопки экспорта отчетов
+            download_txt_btn.click(
+                fn=export_txt_report,
+                inputs=[current_analysis_state],
+                outputs=[download_txt_btn]
+            )
+            download_pdf_btn.click(
+                fn=export_pdf_report,
+                inputs=[current_analysis_state],
+                outputs=[download_pdf_btn]
             )
             
         # Вкладка 2: Настройка распределения

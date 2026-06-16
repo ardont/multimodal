@@ -10,3 +10,5 @@ psutil
 imageio-ffmpeg
 matplotlib
 scipy
+xhtml2pdf
+
